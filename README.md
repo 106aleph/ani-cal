@@ -1,11 +1,11 @@
 # アニメ配信カレンダー
 
-[しょぼいカレンダー](https://cal.syoboi.jp/) からアニメの配信予定を取得し、媒体を選んで登録 → カレンダーで確認 → 1話ごとに視聴記録できるセルフホストアプリです（Rust + SQLite。静的ファイルも含めた単一バイナリを、1コンテナで動かします）。
+[しょぼいカレンダー](https://cal.syoboi.jp/) からアニメの配信予定を取得し、媒体を選んで登録 → カレンダーで確認 → 1話ごとに視聴記録できるセルフホストアプリです（Rust + SQLite。静的ファイルも含めた単一バイナリを、1コンテナで動かします。イメージは約23MB、メモリは約10MB）。
 
 ## 必要な環境
 
 - Linux ホスト（動作確認: Debian 13）
-- Docker と Docker Compose
+- Docker と Docker Compose（初回ビルドに 2コア・2GB で約5分。以降はソースだけの再ビルドで約1分）
 - Tailscale（管理画面で MagicDNS と HTTPS Certificates を有効化）
 - `cal.syoboi.jp` と各社 Push サービスへの HTTPS 通信（外向き）
 

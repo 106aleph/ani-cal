@@ -167,7 +167,7 @@ class SyncIn(BaseModel):
     end: str | None = None    # YYYY-MM-DD（この日を含む）
 
 
-MAX_SYNC_DAYS = 180  # 一度に取得できる期間の上限（自主的な制限。しょぼいカレンダーの規定値ではない）
+MAX_SYNC_DAYS = 90  # 一度に取得できる期間の上限（自主的な制限。しょぼいカレンダーの規定値ではない）
 
 
 @app.post("/api/sync", status_code=202)

@@ -812,19 +812,19 @@ function init() {
     const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
     const r = await formDialog({
       title: '期間を指定して取得', submit: '取得',
-      html: '<p class="muted small">指定した期間の配信予定をしょぼいカレンダーから取得します。開始日を選ぶと終了日が180日間の末日に、終了日を選ぶと開始日が180日間の初日に自動で入ります（あとから短く直せます）。最大180日です。2日ごとに1.5秒間隔で取得するため、長い期間は数分かかります。放送開始が古い作品や、先の予定を一覧に出したいときに使います。</p>',
+      html: '<p class="muted small">指定した期間の配信予定をしょぼいカレンダーから取得します。開始日を選ぶと終了日が90日間の末日に、終了日を選ぶと開始日が90日間の初日に自動で入ります（あとから短く直せます）。最大90日です。2日ごとに1.5秒間隔で取得するため、長い期間は数分かかります。放送開始が古い作品や、先の予定を一覧に出したいときに使います。</p>',
       fields: [
         { name: 'start', label: '開始日', type: 'date', value: store.get('syncStart', day(-30)), required: true },
-        { name: 'end', label: '終了日', type: 'date', value: store.get('syncEnd', day(149)), required: true },
+        { name: 'end', label: '終了日', type: 'date', value: store.get('syncEnd', day(59)), required: true },
       ],
-      // 開始日を決めると終了日を最大期間（180日）の末日に、終了日を決めると開始日を180日前に自動設定する
+      // 開始日を決めると終了日を最大期間（90日）の末日に、終了日を決めると開始日を90日前に自動設定する
       setup: dlg => {
         const st = $('#f_start', dlg), en = $('#f_end', dlg);
         const shiftDay = (v, n) => { const [Y, M, D] = v.split('-').map(Number); return ymd(new Date(Y, M - 1, D + n)); };
         // 前回の値が上限を超えていたら、終了日を詰める
-        if (st.value && en.value && en.value > shiftDay(st.value, 179)) en.value = shiftDay(st.value, 179);
-        st.addEventListener('change', () => { if (st.value) en.value = shiftDay(st.value, 179); });
-        en.addEventListener('change', () => { if (en.value) st.value = shiftDay(en.value, -179); });
+        if (st.value && en.value && en.value > shiftDay(st.value, 89)) en.value = shiftDay(st.value, 89);
+        st.addEventListener('change', () => { if (st.value) en.value = shiftDay(st.value, 89); });
+        en.addEventListener('change', () => { if (en.value) st.value = shiftDay(en.value, -89); });
       },
     });
     if (r.action !== 'ok') return;

@@ -40,6 +40,7 @@ SYOBOI_UA = os.environ.get("SYOBOI_UA") or (
     "AnimeCalendar/1.0" + (f" (+{SYOBOI_UA_URL})" if SYOBOI_UA_URL else ""))
 SYOBOI_INTERVAL_SEC = _float("SYOBOI_INTERVAL_SEC", 1.5)   # リクエスト間隔（サーバー負荷配慮）
 SYOBOI_SPLIT_THRESHOLD = _int("SYOBOI_SPLIT_THRESHOLD", 2000)  # 1回の取得件数がこれ以上なら期間を分割
+SYOBOI_MAX_WAIT_SEC = _int("SYOBOI_MAX_WAIT_SEC", 300)  # 429/503 でこれ以上の待ちを求められたら取得を打ち切る
 
 # 同期
 SYNC_INTERVAL_HOURS = _float("SYNC_INTERVAL_HOURS", 6)

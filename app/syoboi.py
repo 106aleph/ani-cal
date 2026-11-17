@@ -86,6 +86,9 @@ class SyoboiClient:
                     ra = r.headers.get("Retry-After", "")
                     backoff = min(int(ra), 600) if ra.isdigit() else 30 * 2 ** attempt
                     self.interval = min(max(self.interval * 2, 3.0), 15.0)
+                    if backoff > config.SYOBOI_MAX_WAIT_SEC:
+                        # 長時間の制限中は待ち続けず、この取得を失敗として終える（時間を置いて再実行）
+                        raise SyoboiError(f"しょぼいカレンダーから制限されています（{r.status_code}、約{backoff // 60}分後に再試行してください）")
                     log.warning("syoboi rate limited (%s), wait %ss, interval -> %.1fs",
                                 r.status_code, backoff, self.interval)
                 elif 400 <= r.status_code < 500 and r.status_code != 408:

@@ -1,11 +1,11 @@
 # アニメ配信カレンダー
 
-[しょぼいカレンダー](https://cal.syoboi.jp/) からアニメの配信予定を取得し、媒体を選んで登録 → カレンダーで確認 → 1話ごとに視聴記録できるセルフホストアプリです（Rust + SQLite。静的ファイルも含めた単一バイナリを、1コンテナで動かします。イメージは約23MB、メモリは約10MB）。
+[しょぼいカレンダー](https://cal.syoboi.jp/) からアニメの配信予定を取得し、媒体を選んで登録 → カレンダーで確認 → 1話ごとに視聴記録できるセルフホストアプリです（Rust + SQLite の単一バイナリを、1コンテナで動かします。イメージ約23MB、メモリ約10MB）。
 
 ## 必要な環境
 
 - Linux ホスト（動作確認: Debian 13）
-- Docker と Docker Compose（初回ビルドに 2コア・2GB で約5分。以降はソースだけの再ビルドで約1分）
+- Docker と Docker Compose（初回ビルドは 2コア・2GB で約5分）
 - Tailscale（管理画面で MagicDNS と HTTPS Certificates を有効化）
 - `cal.syoboi.jp` と各社 Push サービスへの HTTPS 通信（外向き）
 
@@ -65,16 +65,17 @@ sudo tailscale serve --bg 8000    # APP_PORT を変えた場合はその番号
 - 「中断」で取得を止められます。取得済みの分は保存され、失敗には数えません。
 - 登録作品への反映は取得成功時の最後に行います（「定期取得で自動更新」がオンの作品のみ）。
 - 放送開始が古い作品や取りこぼしは「期間指定」で取り直します。広い範囲は90日ずつ分け、429 を受けたら30分〜1時間空けます。
-- **作品一覧**: 取得済みのアニメ（カテゴリ）を、放送開始のクールごとに出します。古い作品は「期間指定」で取得すると、「時期」から選べます。**配信系**: チャンネルグループ名に「ネット/インターネット/配信/web」を含む媒体（`NET_GROUP_IDS` で指定も可）。
+- **作品一覧**: 取得済みのアニメ（放送中・終了のカテゴリ。`NEW_CATS`）を、放送開始のクールごとに出します。古い作品は「期間指定」で取得すると、「時期」から選べます。**配信系**: チャンネルグループ名に「ネット/インターネット/配信/web」を含む媒体（`NET_GROUP_IDS` で指定も可）。
 - 設定項目は `.env.example` にあります。
 
 ## 運用
 
 ```bash
-docker compose ps
+docker compose ps                                        # healthy ならOK
+docker compose logs --tail 20
 curl -s http://127.0.0.1:8000/api/status; echo
-git pull && docker compose up -d --build               # 更新（最新を取得して再ビルド）
-sqlite3 data/anime.db ".backup backup-$(date +%F).db"    # バックアップ（要 sqlite3）
+git pull && docker compose up -d --build                 # 更新（ソースだけの再ビルドは約1分）
+sudo sqlite3 data/anime.db ".backup $HOME/backup-$(date +%F).db"   # バックアップ（要 sqlite3。DB はコンテナ用ユーザーの所有なので sudo）
 docker compose down                                      # 停止
 sudo tailscale serve --https=443 off                     # serve の設定を外す
 ```
@@ -94,22 +95,22 @@ Rust 1.85 以上。画面（`app/static/`）はビルド時にバイナリへ埋
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/status` | 取得状況 |
+| GET | `/api/health` / `/api/status` | 稼働確認／取得状況 |
 | POST | `/api/sync` | 取得開始（本文 `{start, end}` で期間指定） |
 | POST | `/api/sync/cancel` | 取得の中断 |
 | GET | `/api/logs` | 取得履歴 |
 | GET | `/api/coverage` | 取得済みの日付範囲 |
-| GET | `/api/catalog` | 作品一覧 |
+| GET | `/api/catalog` / `/api/titles/{tid}/channels` | 作品一覧／作品の媒体別の放送 |
 | GET/POST | `/api/tracks` | 登録作品の一覧（`?archived=true` で視聴済み）／登録 |
 | PATCH/DELETE | `/api/tracks/{id}` | 作品の編集／解除 |
-| POST | `/api/tracks/{id}/generate` | 予測話の作成 |
+| POST | `/api/tracks/{id}/generate` / `watch_all` | 予測話の作成／一括視聴 |
 | POST | `/api/tracks/{id}/resync` | 取得データの再反映 |
 | POST | `/api/tracks/{id}/archive` / `unarchive` | 視聴済みへ移す／登録作品へ戻す |
 | GET/POST | `/api/tracks/{id}/episodes` | 話の一覧／追加 |
 | PATCH/DELETE | `/api/episodes/{id}` | 話の編集／削除 |
 | POST | `/api/episodes/{id}/revert` | 取得値に戻す |
 | GET/POST | `/api/push/{key,settings,subscribe,unsubscribe,test}` | 通知の購読と設定 |
-| GET | `/api/calendar?start=&end=` | 期間内の話 |
+| GET | `/api/calendar?start=&end=` / `/api/backlog` | 期間内の話／配信済みで未視聴の話 |
 | GET | `/calendar.ics` | iCalendar |
 
 ## 連絡先

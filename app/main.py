@@ -215,10 +215,10 @@ def cancel_sync():
     return {"cancelled": sync.cancel()}
 
 
-# ---------------------------------------------------------------- 新作一覧
+# ---------------------------------------------------------------- 作品一覧
 @app.get("/api/catalog")
 def catalog():
-    """新作一覧。取得済みのアニメ作品を、放送開始のクール（季節）つきで返す（絞り込みは画面側）"""
+    """作品一覧。取得済みのアニメ作品を、放送開始のクール（季節）つきで返す（絞り込みは画面側）"""
     now = config.now_jst()
     mask = 8 if config.SKIP_REBROADCAST else 0
     with db.connect() as conn:

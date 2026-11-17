@@ -493,7 +493,7 @@ async function renderTracks(archived = false) {
   if (!tracks.length) {
     root.innerHTML = archived
       ? '<p class="empty">視聴済みの作品はまだありません。「登録作品」で全話を視聴済みにして「視聴済みに移す」を押すと、ここに表示されます。</p>'
-      : '<p class="empty">登録作品はまだありません。「新作一覧」で媒体を選んで登録してください。</p>';
+      : '<p class="empty">登録作品はまだありません。「作品一覧」で媒体を選んで登録してください。</p>';
     return;
   }
   root.innerHTML = tracks.map(t => `

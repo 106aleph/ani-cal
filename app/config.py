@@ -53,7 +53,7 @@ SYNC_CHGIDS = _intset("SYNC_CHGIDS")                         # 空=全チャン�
 SYNC_MAX_FAILURES = _int("SYNC_MAX_FAILURES", 5)             # 自動取得が連続でこの回数失敗したら自動取得を停止
 SKIP_REBROADCAST = _bool("SKIP_REBROADCAST", True)
 
-# 新作一覧
+# 作品一覧
 NEW_CATS = _intset("NEW_CATS", "1,10")                       # しょぼいカレンダーのCat (1=アニメ, 10=アニメ(終了/再放送))
 NET_GROUP_IDS = _intset("NET_GROUP_IDS")
 NET_GROUP_KEYWORDS = [k for k in os.environ.get(

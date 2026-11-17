@@ -197,6 +197,7 @@ async function renderCalendar() {
   let evs = await api(`/api/calendar?start=${ymd(start)}&end=${ymd(fetchEnd)}`);
   if (state.hideWatched) evs = evs.filter(e => !e.watched);
   calEvents = evs;
+  state.nowTick = null;
   const byDay = {};
   for (const e of evs) (byDay[disp(e.start_at).key] ||= []).push(e);
   for (const k in byDay) byDay[k].sort((a, b) => disp(a.start_at).time.localeCompare(disp(b.start_at).time));
@@ -251,6 +252,14 @@ async function renderCalendar() {
       const s0 = mins(e);
       for (let hh = Math.floor(s0 / 60) - 1; hh <= Math.floor((s0 + DUR - 1) / 60) + 1; hh++) if (hh >= lo && hh <= hi) hrs.add(hh);
     }
+    // 現在時刻（深夜表記ONなら 25:10 のように、日付も表示上の日に寄せる）
+    const nowInfo = () => {
+      const n = new Date(), p = disp(`${ymd(n)}T${pad(n.getHours())}:${pad(n.getMinutes())}`), [h, m] = p.time.split(':').map(Number);
+      return { key: p.key, min: h * 60 + m, label: p.time };
+    };
+    const nd = nowInfo();
+    const nowInWeek = wk.some(d => ymd(d) === nd.key);
+    if (nowInWeek && Math.floor(nd.min / 60) >= lo && Math.floor(nd.min / 60) <= hi) hrs.add(Math.floor(nd.min / 60)); // 現在の時間帯の行は常に出す
     if (!hrs.size) for (let hh = 19; hh <= 25; hh++) if (hh >= lo && hh <= hi) hrs.add(hh);
     const rows = [...hrs].sort((x, y) => x - y), rowOf = new Map(rows.map((hh, i) => [hh, i]));
     if (!narrow) { // 画面の高さに合わせて時間軸を伸縮（最小は従来の高さ）。見出し行ぶんを引く
@@ -259,10 +268,13 @@ async function renderCalendar() {
     const H = rows.length * 60 * PX;
     const yOf = m => (rowOf.get(Math.floor(m / 60)) * 60 + m % 60) * PX;
     const axis = rows.map((hh, i) => `<div class="hl ${i && rows[i - 1] !== hh - 1 ? 'gap' : ''}" style="top:${i * 60 * PX}px">${pad(hh)}:00</div>`).join('');
-    let head = '<div class="corner"></div>', cols = `<div class="axis" style="height:${H}px">${axis}</div>`;
+    const nowTop = n => (rowOf.has(Math.floor(n.min / 60)) ? yOf(n.min) : null);
+    const nt = nowTop(nd);
+    const nowLabel = nowInWeek && nt !== null ? `<div class="nowlabel" style="top:${nt}px">${nd.label}</div>` : '';
+    let head = '<div class="corner"></div>', cols = `<div class="axis" style="height:${H}px">${axis}${nowLabel}</div>`;
     for (const d of wk) {
       const k = ymd(d), list = byDay[k] || [];
-      head += `<div class="wd wd${d.getDay()} ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</div>`;
+      head += `<div class="wd wd${d.getDay()} ${k === nd.key ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</div>`;
       // 重なる予定は横に並べる
       const items = list.map(e => ({ e, s: mins(e) })).sort((x, y) => x.s - y.s);
       let cluster = [], clusterEnd = -1;
@@ -274,7 +286,8 @@ async function renderCalendar() {
         cluster.push(it); clusterEnd = Math.max(clusterEnd < 0 ? 0 : clusterEnd, it.s + DUR);
       }
       if (cluster.length) flush();
-      cols += `<div class="dcol ${k === today ? 'today' : ''}" style="height:${H}px">` + items.map(it => {
+      const line = nowInWeek && nt !== null ? `<div class="nowline ${k === nd.key ? 'on' : ''}" style="top:${nt}px"></div>` : '';
+      cols += `<div class="dcol ${k === nd.key ? 'today' : ''}" data-key="${k}" style="height:${H}px">` + line + items.map(it => {
         const top = yOf(it.s), w = 100 / it.n;
         return evHtml(it.e).replace('class="ev ', `class="ev blk ${it.n >= 3 ? 'tight' : ''} `)
           .replace('data-id', `style="top:${top}px;height:${DUR * PX - 2}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 2px);--h:${hue(it.e.track_id)}" data-id`)
@@ -282,6 +295,17 @@ async function renderCalendar() {
       }).join('') + '</div>';
     }
     $('#cal-week').innerHTML = `<div class="tgrid" style="--hour:${60 * PX}px"><div class="thead">${head}</div><div class="tbody">${cols}</div></div>`;
+    // 1分ごとに、再描画せず現在時刻の線だけ動かす（時間帯の行が無くなったときだけ描き直す）
+    state.nowTick = () => {
+      const n = nowInfo();
+      if (!wk.some(d => ymd(d) === n.key)) { renderCalendar().catch(() => { }); return; }
+      const top = nowTop(n);
+      if (top === null) { renderCalendar().catch(() => { }); return; }
+      $$('#cal-week .nowline').forEach(el => { el.style.top = top + 'px'; el.classList.toggle('on', el.parentElement.dataset.key === n.key); });
+      $$('#cal-week .dcol').forEach(el => el.classList.toggle('today', el.dataset.key === n.key));
+      const lab = $('#cal-week .nowlabel');
+      if (lab) { lab.style.top = top + 'px'; lab.textContent = n.label; }
+    };
     if (narrow) { // 今日（無ければ週の頭）の列が見える位置までスクロール
       const box = $('#cal-week'), col = $('.thead .wd.today', box) || $('.thead .wd', box);
       const left = col.getBoundingClientRect().left - box.getBoundingClientRect().left + box.scrollLeft;
@@ -604,6 +628,7 @@ function init() {
     await renderCalendar();
   }));
   bindEventClicks($('#cal-day'), renderCalendar);
+  setInterval(() => { if (state.tab === 'calendar' && state.view === 'week' && state.nowTick) state.nowTick(); }, 30000);
   let rt;
   window.addEventListener('resize', () => { // 画面の回転・リサイズで、高さに合わせて描き直す
     clearTimeout(rt);

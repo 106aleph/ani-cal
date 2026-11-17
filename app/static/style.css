@@ -129,6 +129,13 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 .dcol .ev.blk .time { order: 1; }
 .dcol .ev.blk .w { order: 0; }
 
+/* 現在時刻の線（赤）。今日の列は実線、他の列は薄く */
+.nowline { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #ff5a5f; opacity: .28; z-index: 4; pointer-events: none; }
+.nowline.on { opacity: 1; box-shadow: 0 0 6px rgba(255, 90, 95, .6); }
+.nowline.on::before { content: ''; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: #ff5a5f; }
+.nowlabel { position: absolute; right: 3px; transform: translateY(-50%); z-index: 4; background: #ff5a5f; color: #20080a; font-size: 10.5px;
+  font-weight: 700; line-height: 1.5; padding: 0 5px; border-radius: 4px; font-variant-numeric: tabular-nums; pointer-events: none; }
+
 /* 3件以上重なる時間帯は作品名を優先 */
 .dcol .ev.blk.tight .w, .dcol .ev.blk.tight .time, .dcol .ev.blk.tight .ep { display: none; }
 .dcol .ev.blk.tight { padding: 2px 3px; font-size: 11px; }

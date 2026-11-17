@@ -540,7 +540,7 @@ def delete_episode(ep_id: int):
 
 # ---------------------------------------------------------------- カレンダー
 EP_CAL_SELECT = """
-SELECT e.*, tr.id AS track_id,
+SELECT e.*, tr.id AS track_id, tr.tid AS tid,
   COALESCE(NULLIF(tr.title,''), t.title, '(無題)') AS title,
   COALESCE(NULLIF(tr.platform,''), c.name, '') AS platform,
   p.end_at AS end_at

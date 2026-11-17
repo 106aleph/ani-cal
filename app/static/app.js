@@ -36,6 +36,17 @@ function toast(msg, isErr = false) {
 const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, true); } };
 
 function hue(id) { return (Number(id) * 137.508) % 360; }
+/* 色分けは「アニメ」と「媒体」で別々にする。
+   アニメの色: 作品（tid）ごと。同じアニメを複数の媒体で登録しても同じ色（手動登録は登録作品ごと）。
+   媒体の色: 媒体名ごと。アニメの色とは別の基準で決め、点（●）で示す。 */
+const animeKey = o => o.tid ?? 1e5 + Number(o.track_id ?? o.id);
+const PLAT_SLOTS = [0, 5, 2, 7, 10, 3, 8, 1, 6, 11, 4, 9];  // 12色。隣り合って登録した媒体どうしの色相が離れるように並べる
+const platMap = store.get('platHues', {});                  // 媒体名 → 色の番号（初めて見た順に割り当て、端末に記憶して固定）
+function platHue(name) {
+  name = String(name || '');
+  if (!(name in platMap)) { platMap[name] = Object.keys(platMap).length % 12; store.set('platHues', platMap); }
+  return PLAT_SLOTS[platMap[name]] * 30 + 15;
+}
 
 /* 'YYYY-MM-DDTHH:MM' → 表示用 {key, time, date} */
 const state = {
@@ -239,7 +250,7 @@ function calRange() {
 
 function evHtml(e) {
   const p = disp(e.start_at);
-  return `<div class="ev ${e.watched ? 'done' : ''}" style="--h:${hue(e.track_id)}" data-id="${e.id}" title="${esc(e.platform)} ${esc(e.subtitle || '')}">
+  return `<div class="ev ${e.watched ? 'done' : ''}" style="--h:${hue(animeKey(e))}" data-id="${e.id}" title="${esc(e.platform)} ${esc(e.subtitle || '')}">
     <input type="checkbox" class="w" ${e.watched ? 'checked' : ''} aria-label="視聴済み">
     <span class="time">${p.time}</span><span class="t">${esc(e.title)}</span><span class="ep">${epNum(e.number)}</span>
   </div>`;
@@ -355,7 +366,7 @@ async function renderCalendar() {
       cols += `<div class="dcol ${k === nd.key ? 'today' : ''}" data-key="${k}" style="height:${H}px">` + line + items.map(it => {
         const top = yOf(it.s), w = 100 / it.n;
         return evHtml(it.e).replace('class="ev ', `class="ev blk ${it.n >= 3 ? 'tight' : ''} `)
-          .replace('data-id', `style="top:${top}px;height:${DUR * PX - 2}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 2px);--h:${hue(it.e.track_id)}" data-id`)
+          .replace('data-id', `style="top:${top}px;height:${DUR * PX - 2}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 2px);--h:${hue(animeKey(it.e))}" data-id`)
           .replace(/style="--h:[^"]*" (style=)/, '$1');
       }).join('') + '</div>';
     }
@@ -454,7 +465,7 @@ function renderCatalog() {
     if (plat) chs.sort((a, b) => (b.name === plat) - (a.name === plat));
     return `<div class="work">
       <div class="wt"><strong>${esc(it.title)}</strong> <span class="muted small">${esc(it.season || '')}</span></div>
-      <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${plat && ch.name === plat ? 'hl' : ''}"
+      <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${plat && ch.name === plat ? 'hl' : ''}" style="--ph:${platHue(ch.name)}"
           data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}" data-archived="${ch.track_archived ? 1 : 0}"
           title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}${ch.track_archived ? '（視聴済み）' : ''}">
           ${ch.track_id ? '✓ ' : ''}${esc(ch.name)} <span class="when">${esc(fmtFull(ch.first_start))}${ch.has_ep1 ? '〜' : '頃〜'}</span></button>`).join('')
@@ -497,11 +508,11 @@ async function renderTracks(archived = false) {
     return;
   }
   root.innerHTML = tracks.map(t => `
-    <details class="track" data-id="${t.id}" ${state.openTracks.has(t.id) ? 'open' : ''} style="--h:${hue(t.id)}">
+    <details class="track" data-id="${t.id}" ${state.openTracks.has(t.id) ? 'open' : ''} style="--h:${hue(animeKey(t))}">
       <summary>
         <span class="bar"></span>
         <span class="tt"><strong>${esc(t.display_title)}</strong>
-          <span class="badge plat">${esc(t.display_platform || '媒体未設定')}</span>
+          <span class="badge plat" style="--ph:${platHue(t.display_platform)}">${esc(t.display_platform || '媒体未設定')}</span>
           ${t.tid ? '' : '<span class="badge src-manual">手動登録</span>'}
           ${t.auto_sync || !t.tid ? '' : '<span class="badge hidden">自動取得OFF</span>'}</span>
         <span class="meta">${trackMeta(t)}</span>

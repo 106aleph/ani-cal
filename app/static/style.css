@@ -34,7 +34,15 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; c
 button, .btn { background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 5px 13px;
   cursor: pointer; text-decoration: none; display: inline-block; transition: background .12s, border-color .12s; }
 button:hover, .btn:hover { border-color: var(--accent); background: #232936; }
-button:disabled { opacity: .45; cursor: default; border-color: var(--line-strong); background: var(--panel-2); }
+[hidden] { display: none !important; } /* button 等の display 指定で hidden が無効にならないように */
+button:disabled { opacity: .4; cursor: not-allowed; border-color: var(--line-strong); background: var(--panel-2); }
+button:disabled:hover { border-color: var(--line-strong); background: var(--panel-2); }
+/* 押せない状態がひと目で分かるよう、無効のボタンは破線の枠にして文字を灰色にする */
+button:disabled, button.primary:disabled { border-style: dashed; background: transparent; color: var(--muted); font-weight: 400; }
+button.danger:disabled { color: var(--muted); }
+/* 中断ボタン: 押せるときは赤で目立たせ、押せないときは灰色の破線 */
+#sync-cancel-btn:not(:disabled) { background: rgba(255, 128, 128, .14); border-color: var(--danger); color: var(--danger); font-weight: 600; }
+#sync-cancel-btn:not(:disabled):hover { background: rgba(255, 128, 128, .26); }
 button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
 button.primary:hover { background: #95b9ff; }
 button.danger { color: var(--danger); }

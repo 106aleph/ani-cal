@@ -599,7 +599,11 @@ async function refreshStatus() {
   el.title = s.last_message || '';
   $('#sync-btn').disabled = s.running;
   $('#sync-range-btn').disabled = s.running;
-  $('#sync-cancel-btn').hidden = !s.running;
+  // 中断は取得中だけ押せる。中断要求後（停止処理中）も、二重に押せないよう無効にする
+  const cb = $('#sync-cancel-btn'), stopping = s.running && (s.progress || '').startsWith('中断');
+  cb.disabled = !s.running || stopping;
+  cb.textContent = stopping ? '中断中…' : '中断';
+  cb.title = !s.running ? '実行中の取得はありません' : stopping ? '中断しています' : '実行中の取得を中断（取得済みの分は保存されます）';
   clearTimeout(pollTimer);
   if (s.running) pollTimer = setTimeout(refreshStatus, 3000);
   else if (refreshStatus._wasRunning) { state.catalog = null; renderTab(); }

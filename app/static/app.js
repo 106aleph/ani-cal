@@ -217,16 +217,18 @@ async function renderCalendar() {
     const wk = [];
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) wk.push(new Date(d));
     const inWeek = wk.flatMap(d => byDay[ymd(d)] || []);
-    const dayStart = state.late ? 5 : 0, dayEnd = state.late ? 29 : 24; // 表示できる時刻の範囲
-    let h0 = 18, h1 = 25; // 予定が無いときの既定（夜アニメ帯）
-    if (inWeek.length) {
-      const ms = inWeek.map(mins);
-      h0 = Math.floor(Math.min(...ms) / 60); h1 = Math.ceil((Math.max(...ms) + DUR) / 60);
+    // 配信のある時間（前後1時間つき）だけを行にして詰める。間が空く所は区切り線で示す
+    const hrs = new Set();
+    const lo = state.late ? 5 : 0, hi = state.late ? 29 : 23;
+    for (const e of inWeek) {
+      const s0 = mins(e);
+      for (let hh = Math.floor(s0 / 60) - 1; hh <= Math.floor((s0 + DUR - 1) / 60) + 1; hh++) if (hh >= lo && hh <= hi) hrs.add(hh);
     }
-    h0 = Math.max(dayStart, h0 - 1); h1 = Math.min(dayEnd, h1 + 1);
-    const H = (h1 - h0) * 60 * PX;
-    let axis = '';
-    for (let hh = h0; hh < h1; hh++) axis += `<div class="hl" style="top:${(hh - h0) * 60 * PX}px">${pad(hh)}:00</div>`;
+    if (!hrs.size) for (let hh = 19; hh <= 25; hh++) if (hh >= lo && hh <= hi) hrs.add(hh);
+    const rows = [...hrs].sort((x, y) => x - y), rowOf = new Map(rows.map((hh, i) => [hh, i]));
+    const H = rows.length * 60 * PX;
+    const yOf = m => (rowOf.get(Math.floor(m / 60)) * 60 + m % 60) * PX;
+    const axis = rows.map((hh, i) => `<div class="hl ${i && rows[i - 1] !== hh - 1 ? 'gap' : ''}" style="top:${i * 60 * PX}px">${pad(hh)}:00</div>`).join('');
     let head = '<div class="corner"></div>', cols = `<div class="axis" style="height:${H}px">${axis}</div>`;
     for (const d of wk) {
       const k = ymd(d), list = byDay[k] || [];
@@ -243,7 +245,7 @@ async function renderCalendar() {
       }
       if (cluster.length) flush();
       cols += `<div class="dcol ${k === today ? 'today' : ''}" style="height:${H}px">` + items.map(it => {
-        const top = (it.s - h0 * 60) * PX, w = 100 / it.n;
+        const top = yOf(it.s), w = 100 / it.n;
         return evHtml(it.e).replace('class="ev ', 'class="ev blk ')
           .replace('data-id', `style="top:${top}px;height:${DUR * PX - 2}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 2px);--h:${hue(it.e.track_id)}" data-id`)
           .replace(/style="--h:[^"]*" (style=)/, '$1');

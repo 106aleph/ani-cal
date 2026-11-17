@@ -1,21 +1,27 @@
-FROM python:3.12-slim-trixie
+# ---- ビルド: musl の静的リンクで、単一バイナリ（静的ファイル込み）を作る
+FROM rust:1-alpine AS build
+RUN apk add --no-cache build-base
+WORKDIR /src
+# 依存だけ先にビルドしてキャッシュする（ソースを変えても依存の再ビルドを避ける）
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --locked && rm -rf src
+COPY src ./src
+COPY static ./static
+RUN touch src/main.rs && cargo build --release --locked
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    DB_PATH=/data/anime.db
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-RUN useradd --system --uid 10001 --home /app app \
- && mkdir -p /data \
- && chmod +x /app/entrypoint.sh
+# ---- 実行
+FROM alpine:3.21
+RUN apk add --no-cache su-exec \
+ && addgroup -S -g 10001 app && adduser -S -u 10001 -G app -H -h /data app \
+ && mkdir -p /data
+ENV DB_PATH=/data/anime.db
+COPY --from=build /src/target/release/ani-cal /usr/local/bin/ani-cal
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD ["ani-cal", "--healthcheck"]
 
-ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["ani-cal"]

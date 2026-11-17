@@ -202,7 +202,7 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
   margin-right: 4px; white-space: nowrap; vertical-align: 1px; color: var(--muted); }
 .badge.plat { color: var(--fg); }
 /* 媒体の色は点で示す（アニメの色＝帯・チップとは別の基準） */
-.badge.plat::before, .chip::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+.badge.plat::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
   background: hsl(var(--ph, 0) 65% 62%); box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .35); vertical-align: 0; }
 .badge.src-sync { color: var(--ok); border-color: rgba(111, 211, 154, .4); }
 .badge.src-manual { color: #d4a3f0; border-color: rgba(212, 163, 240, .4); }

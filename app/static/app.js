@@ -465,7 +465,7 @@ function renderCatalog() {
     if (plat) chs.sort((a, b) => (b.name === plat) - (a.name === plat));
     return `<div class="work">
       <div class="wt"><strong>${esc(it.title)}</strong> <span class="muted small">${esc(it.season || '')}</span></div>
-      <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${plat && ch.name === plat ? 'hl' : ''}" style="--ph:${platHue(ch.name)}"
+      <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${plat && ch.name === plat ? 'hl' : ''}"
           data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}" data-archived="${ch.track_archived ? 1 : 0}"
           title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}${ch.track_archived ? '（視聴済み）' : ''}">
           ${ch.track_id ? '✓ ' : ''}${esc(ch.name)} <span class="when">${esc(fmtFull(ch.first_start))}${ch.has_ep1 ? '〜' : '頃〜'}</span></button>`).join('')

@@ -12,6 +12,7 @@
 ## セットアップ
 
 ```bash
+git clone https://github.com/106aleph/ani-cal.git && cd ani-cal
 cp .env.example .env              # SYOBOI_UA_URL を設定（下記）
 docker compose up -d --build
 docker compose logs -f            # 初回取得は数分
@@ -72,7 +73,7 @@ sudo tailscale serve --bg 8000    # APP_PORT を変えた場合はその番号
 ```bash
 docker compose ps
 curl -s http://127.0.0.1:8000/api/status; echo
-docker compose up -d --build                             # 更新
+git pull && docker compose up -d --build               # 更新（最新を取得して再ビルド）
 sqlite3 data/anime.db ".backup backup-$(date +%F).db"    # バックアップ（要 sqlite3）
 docker compose down                                      # 停止
 sudo tailscale serve --https=443 off                     # serve の設定を外す

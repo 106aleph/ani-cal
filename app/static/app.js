@@ -212,16 +212,44 @@ async function renderCalendar() {
   } else if (state.view === 'week') {
     const last = new Date(end - 864e5);
     $('#cal-label').textContent = `${start.getFullYear()}/${start.getMonth() + 1}/${start.getDate()} 〜 ${last.getMonth() + 1}/${last.getDate()}`;
-    let h = '<div class="month week">';
-    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
-      const k = ymd(d);
-      h += `<div class="wd wd${d.getDay()} ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</div>`;
+    const PX = 1.6, DUR = 30; // 1分あたりpx / 1話の表示長(分)
+    const mins = e => { const [h, m] = disp(e.start_at).time.split(':').map(Number); return h * 60 + m; };
+    const wk = [];
+    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) wk.push(new Date(d));
+    const inWeek = wk.flatMap(d => byDay[ymd(d)] || []);
+    const dayStart = state.late ? 5 : 0, dayEnd = state.late ? 29 : 24; // 表示できる時刻の範囲
+    let h0 = 18, h1 = 25; // 予定が無いときの既定（夜アニメ帯）
+    if (inWeek.length) {
+      const ms = inWeek.map(mins);
+      h0 = Math.floor(Math.min(...ms) / 60); h1 = Math.ceil((Math.max(...ms) + DUR) / 60);
     }
-    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
-      const k = ymd(d);
-      h += `<div class="day ${k === today ? 'today' : ''} wd${d.getDay()}">${(byDay[k] || []).map(evHtml).join('') || '<p class="muted small empty">なし</p>'}</div>`;
+    h0 = Math.max(dayStart, h0 - 1); h1 = Math.min(dayEnd, h1 + 1);
+    const H = (h1 - h0) * 60 * PX;
+    let axis = '';
+    for (let hh = h0; hh < h1; hh++) axis += `<div class="hl" style="top:${(hh - h0) * 60 * PX}px">${pad(hh)}:00</div>`;
+    let head = '<div class="corner"></div>', cols = `<div class="axis" style="height:${H}px">${axis}</div>`;
+    for (const d of wk) {
+      const k = ymd(d), list = byDay[k] || [];
+      head += `<div class="wd wd${d.getDay()} ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</div>`;
+      // 重なる予定は横に並べる
+      const items = list.map(e => ({ e, s: mins(e) })).sort((x, y) => x.s - y.s);
+      let cluster = [], clusterEnd = -1;
+      const flush = () => { const n = Math.max(0, ...cluster.map(c => c.lane + 1)); cluster.forEach(c => c.n = n); cluster = []; };
+      for (const it of items) {
+        if (it.s >= clusterEnd && cluster.length) flush();
+        const used = new Set(cluster.filter(c => c.s + DUR > it.s).map(c => c.lane));
+        it.lane = 0; while (used.has(it.lane)) it.lane++;
+        cluster.push(it); clusterEnd = Math.max(clusterEnd < 0 ? 0 : clusterEnd, it.s + DUR);
+      }
+      if (cluster.length) flush();
+      cols += `<div class="dcol ${k === today ? 'today' : ''}" style="height:${H}px">` + items.map(it => {
+        const top = (it.s - h0 * 60) * PX, w = 100 / it.n;
+        return evHtml(it.e).replace('class="ev ', 'class="ev blk ')
+          .replace('data-id', `style="top:${top}px;height:${DUR * PX - 2}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 2px);--h:${hue(it.e.track_id)}" data-id`)
+          .replace(/style="--h:[^"]*" (style=)/, '$1');
+      }).join('') + '</div>';
     }
-    $('#cal-week').innerHTML = h + '</div>';
+    $('#cal-week').innerHTML = `<div class="tgrid"><div class="thead">${head}</div><div class="tbody">${cols}</div></div>`;
   } else {
     $('#cal-label').textContent = `${ymd(start).slice(5).replace('-', '/')} 〜 ${ymd(new Date(end - 864e5)).slice(5).replace('-', '/')}`;
     const backlog = (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start));

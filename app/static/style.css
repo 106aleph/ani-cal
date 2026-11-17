@@ -77,12 +77,24 @@ main { padding: 12px 16px 40px; max-width: 1400px; margin: 0 auto; }
 .ev.done { opacity: .5; }
 .ev.done .t { text-decoration: line-through; }
 
-/* week view */
-.month.week .wd.today { background: var(--today); }
-.month.week .day { min-height: 360px; }
-.month.week .ev { flex-wrap: wrap; white-space: normal; }
-.month.week .ev .t { white-space: normal; flex: 1 1 60%; }
-.month.week .empty { padding: 8px 0; text-align: center; }
+/* week view (time grid) */
+#cal-week { overflow-x: auto; }
+.tgrid { min-width: 720px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.thead, .tbody { display: grid; grid-template-columns: 3.6em repeat(7, minmax(0, 1fr)); }
+.thead { border-bottom: 1px solid var(--line); }
+.thead .wd { text-align: center; font-size: 12px; font-weight: 600; padding: 4px; border-left: 1px solid var(--line); }
+.thead .wd.today, .dcol.today { background: var(--today); }
+.axis { position: relative; }
+.axis .hl { position: absolute; right: 4px; transform: translateY(-.6em); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.axis .hl:first-child { transform: none; }
+.dcol { position: relative; border-left: 1px solid var(--line);
+  background-image: repeating-linear-gradient(to bottom, var(--line) 0, var(--line) 1px, transparent 1px, transparent 96px); }
+.dcol .ev.blk { position: absolute; margin: 0; flex-wrap: wrap; align-content: flex-start; overflow: hidden; white-space: normal;
+  line-height: 1.2; font-size: 11px; padding: 2px 3px; gap: 2px 3px; }
+.dcol .ev.blk .t { flex: 1 1 100%; order: 3; white-space: normal; }
+.dcol .ev.blk .ep { order: 2; }
+.dcol .ev.blk .time { order: 1; }
+.dcol .ev.blk .w { order: 0; }
 
 /* list view */
 .dayhead { font-size: 14px; margin: 14px 0 4px; padding-bottom: 2px; border-bottom: 1px solid var(--line); }
@@ -147,8 +159,7 @@ dialog menu { display: flex; gap: 6px; padding: 0; margin: 14px 0 0; align-items
 @media (max-width: 720px) {
   main { padding: 8px; }
   .day { min-height: 70px; }
-  .month:not(.week) .ev .time, .month:not(.week) .ev .w { display: none; }
-  .month.week .day { min-height: 200px; }
+  .month .ev .time, .month .ev .w { display: none; }
   .month .ev { font-size: 10px; padding: 1px 2px; }
   .sync { margin-left: 0; width: 100%; }
   .eptable th:nth-child(4), .eptable td:nth-child(4) { display: none; }

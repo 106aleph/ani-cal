@@ -35,18 +35,20 @@ DB_PATH = os.environ.get("DB_PATH", "/data/anime.db")
 
 # しょぼいカレンダー
 SYOBOI_BASE = os.environ.get("SYOBOI_BASE", "https://cal.syoboi.jp/db.php")
-SYOBOI_UA = os.environ.get("SYOBOI_UA", "self-hosted-anime-calendar/1.0")
+SYOBOI_UA_URL = os.environ.get("SYOBOI_UA_URL", "")          # 案内ページ（連絡方法を記載）のURL。設定を推奨
+SYOBOI_UA = os.environ.get("SYOBOI_UA") or (
+    "AnimeCalendar/1.0" + (f" (+{SYOBOI_UA_URL})" if SYOBOI_UA_URL else ""))
 SYOBOI_INTERVAL_SEC = _float("SYOBOI_INTERVAL_SEC", 1.5)   # リクエスト間隔（サーバー負荷配慮）
 SYOBOI_SPLIT_THRESHOLD = _int("SYOBOI_SPLIT_THRESHOLD", 2000)  # 1回の取得件数がこれ以上なら期間を分割
 
 # 同期
 SYNC_INTERVAL_HOURS = _float("SYNC_INTERVAL_HOURS", 6)
 SYNC_ON_STARTUP = _bool("SYNC_ON_STARTUP", True)
-SYNC_DAYS_BACK = _int("SYNC_DAYS_BACK", 60)                  # 初回取得で遡る日数
-SYNC_DAYS_BACK_INCREMENTAL = _int("SYNC_DAYS_BACK_INCREMENTAL", 14)
+SYNC_DAYS_BACK = _int("SYNC_DAYS_BACK", 60)                  # 初回取得で遡る日数（2回目以降は差分取得）
 SYNC_DAYS_FORWARD = _int("SYNC_DAYS_FORWARD", 120)
 SYNC_CHUNK_DAYS = max(1, _int("SYNC_CHUNK_DAYS", 2))
 SYNC_CHGIDS = _intset("SYNC_CHGIDS")                         # 空=全チャンネルグループ
+SYNC_MAX_FAILURES = _int("SYNC_MAX_FAILURES", 5)             # 自動取得が連続でこの回数失敗したら自動取得を停止
 SKIP_REBROADCAST = _bool("SKIP_REBROADCAST", True)
 
 # 新作一覧

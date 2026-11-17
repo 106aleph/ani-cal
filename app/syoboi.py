@@ -7,6 +7,7 @@
   TitleLookup    作品タイトル
 """
 import logging
+import random
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
@@ -59,21 +60,24 @@ class SyoboiClient:
 
     def _get(self, params: dict) -> ET.Element:
         last_exc = None
-        for attempt in range(6):
+        for attempt in range(5):
             wait = self._last + self.interval - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
-            backoff = 5 * (attempt + 1)
+            backoff = 5 * 2 ** attempt  # 5,10,20,40,80秒
             try:
                 r = self.http.get(self.base, params=params)
                 self._last = time.monotonic()
                 if r.status_code in (429, 503):
-                    # 制限中: Retry-After があればそれに従い、無ければ長めに待つ。以降の取得間隔も広げる
+                    # 制限中: Retry-After に従う（無ければ長めに待つ）。以降の取得間隔も広げる
                     ra = r.headers.get("Retry-After", "")
-                    backoff = min(int(ra), 300) if ra.isdigit() else 30 * (attempt + 1)
+                    backoff = min(int(ra), 600) if ra.isdigit() else 30 * 2 ** attempt
                     self.interval = min(max(self.interval * 2, 3.0), 15.0)
                     log.warning("syoboi rate limited (%s), wait %ss, interval -> %.1fs",
                                 r.status_code, backoff, self.interval)
+                elif 400 <= r.status_code < 500 and r.status_code != 408:
+                    # 同じ要求を繰り返しても解決しないエラーは再試行しない
+                    raise SyoboiError(f"HTTP {r.status_code}: {params.get('Command')}")
                 r.raise_for_status()
                 root = ET.fromstring(r.content)
                 code = root.findtext("Result/Code")
@@ -84,8 +88,10 @@ class SyoboiClient:
             except (httpx.HTTPError, ET.ParseError) as e:
                 self._last = time.monotonic()
                 last_exc = e
-                log.warning("syoboi request failed (%s), retry in %ss", e, backoff)
-                time.sleep(backoff)
+                backoff *= random.uniform(1.0, 1.3)  # 再試行の集中を避ける
+                log.warning("syoboi request failed (%s), retry in %.0fs", e, backoff)
+                if attempt < 4:
+                    time.sleep(backoff)
         raise SyoboiError(f"request failed: {last_exc}")
 
     # ---- API ----
@@ -129,23 +135,40 @@ class SyoboiClient:
             })
         return out
 
-    def programs(self, start: datetime, end: datetime, chids: list[int] | None = None) -> list[dict]:
-        """start〜end の番組。件数が多い場合は期間を分割して再取得する"""
+    def _fetch_programs(self, key: str, start: datetime, end: datetime, chids, end_inclusive: bool) -> list[dict]:
+        """key は Range（放送日時で絞る）か LastUpdate（更新日時で絞る）。件数が多いときは期間を分割する"""
         params = {
             "Command": "ProgLookup",
-            "Range": f"{start:%Y%m%d_%H%M%S}-{end:%Y%m%d_%H%M%S}",
+            key: f"{start:%Y%m%d_%H%M%S}-{end:%Y%m%d_%H%M%S}",
             "JOIN": "SubTitles",
         }
         if chids:
             params["ChID"] = ",".join(map(str, chids))
         root = self._get(params)
         items = _items(root, "ProgItem")
-        if len(items) >= config.SYOBOI_SPLIT_THRESHOLD and (end - start) > timedelta(hours=6):
-            mid = start + (end - start) / 2
-            mid = mid.replace(second=0, microsecond=0)
-            log.info("split range %s - %s (%d items)", start, end, len(items))
-            return self.programs(start, mid, chids) + self.programs(mid + timedelta(seconds=1), end, chids)
+        if len(items) >= config.SYOBOI_SPLIT_THRESHOLD and (end - start) > timedelta(minutes=10):
+            mid = (start + (end - start) / 2).replace(second=0, microsecond=0)
+            log.info("split %s %s - %s (%d items)", key, start, end, len(items))
+            gap = timedelta(seconds=1) if end_inclusive else timedelta(0)
+            return (self._fetch_programs(key, start, mid - gap if end_inclusive else mid, chids, end_inclusive)
+                    + self._fetch_programs(key, mid, end, chids, end_inclusive))
+        return self._parse_programs(items)
 
+    def programs(self, start: datetime, end: datetime, chids: list[int] | None = None) -> list[dict]:
+        """放送日時が start〜end の番組"""
+        return self._fetch_programs("Range", start, end, chids, True)
+
+    def programs_updated(self, since: datetime, until: datetime, chids: list[int] | None = None) -> list[dict]:
+        """since〜until に更新された番組（差分取得）"""
+        return self._fetch_programs("LastUpdate", since, until, chids, False)
+
+    def titles_updated(self, since: datetime) -> set[int]:
+        """since 以降に更新されたタイトルの TID 一覧"""
+        root = self._get({"Command": "TitleLookup", "TID": "*", "LastUpdate": f"{since:%Y%m%d_%H%M%S}-"})
+        return {t for t in (_int(it.get("TID")) for it in _items(root, "TitleItem")) if t is not None}
+
+    @staticmethod
+    def _parse_programs(items: list[dict]) -> list[dict]:
         out = []
         for it in items:
             pid, tid, chid = _int(it.get("PID")), _int(it.get("TID")), _int(it.get("ChID"))

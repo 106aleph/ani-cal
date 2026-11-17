@@ -510,6 +510,9 @@ async function refreshStatus() {
   if (s.running) {
     el.textContent = `取得中… ${s.progress || ''}`;
     el.className = 'running';
+  } else if (s.auto_paused) {
+    el.textContent = `自動取得を停止中（連続失敗）: ${s.last_error || ''} 「今すぐ取得」で成功すると再開します`;
+    el.className = 'err';
   } else if (s.last_error) {
     el.textContent = `取得エラー: ${s.last_error}`;
     el.className = 'err';

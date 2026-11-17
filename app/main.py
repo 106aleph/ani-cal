@@ -155,6 +155,7 @@ def status():
         counts = {k: conn.execute(f"SELECT COUNT(*) FROM {k}").fetchone()[0]
                   for k in ("titles", "programs", "channels", "tracks", "episodes")}
         return {**sync.STATE, "last_success": db.get_meta(conn, "last_success"),
+                "auto_paused": db.get_meta(conn, "auto_paused", "0") == "1",
                 "counts": counts, "now": config.fmt_dt(config.now_jst())}
 
 

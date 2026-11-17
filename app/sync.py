@@ -102,15 +102,45 @@ def apply_all_tracks(conn) -> None:
 
 
 # ---------------------------------------------------------------- 取得処理
-def run_sync() -> bool:
+def _finish_log(log_id, status, programs, titles, message) -> None:
+    if log_id is None:
+        return
+    try:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE sync_log SET finished_at=?, status=?, programs=?, titles=?, message=? WHERE id=?",
+                (config.fmt_dt(config.now_jst()), status, programs, titles, message, log_id))
+            conn.execute("DELETE FROM sync_log WHERE id <= (SELECT MAX(id) FROM sync_log) - 500")
+    except Exception:
+        log.exception("failed to write sync_log")
+
+
+def run_sync(start_date: datetime | None = None, end_date: datetime | None = None, trigger: str = "manual") -> bool:
+    """start_date/end_date を渡すと、その期間を取得する（省略時は設定の既定期間）"""
     if not _lock.acquire(blocking=False):
         return False
     STATE.update(running=True, progress="開始", last_started=config.fmt_dt(config.now_jst()),
                  last_error=None)
     client = SyoboiClient()
+    log_id = None
+    total = n_titles = 0
     try:
         with db.connect() as conn:
             last_full = db.get_meta(conn, "last_full_success")
+        now = config.now_jst()
+        back = config.SYNC_DAYS_BACK_INCREMENTAL if last_full else config.SYNC_DAYS_BACK
+        custom = start_date is not None and end_date is not None
+        if custom:
+            start, end = start_date, end_date
+            trigger = "range"
+        else:
+            start = (now - timedelta(days=back)).replace(hour=0, minute=0, second=0)
+            end = now + timedelta(days=config.SYNC_DAYS_FORWARD)
+        with db.connect() as conn:
+            log_id = conn.execute(
+                "INSERT INTO sync_log(started_at, trigger, range_start, range_end) VALUES(?,?,?,?)",
+                (config.fmt_dt(now), trigger, start.strftime("%Y-%m-%d"),
+                 (end - timedelta(seconds=1)).strftime("%Y-%m-%d"))).lastrowid
 
         # 1. チャンネル（媒体）
         STATE["progress"] = "チャンネル取得"
@@ -133,11 +163,7 @@ def run_sync() -> bool:
             chids = [c["chid"] for c in chans if c["gid"] in config.SYNC_CHGIDS] or None
 
         # 2. 番組（配信予定）
-        now = config.now_jst()
-        back = config.SYNC_DAYS_BACK_INCREMENTAL if last_full else config.SYNC_DAYS_BACK
-        start = (now - timedelta(days=back)).replace(hour=0, minute=0, second=0)
-        end = now + timedelta(days=config.SYNC_DAYS_FORWARD)
-        tids, total, cur = set(), 0, start
+        tids, cur = set(), start
         stamp = config.fmt_dt(now)
         while cur < end:
             nxt = min(cur + timedelta(days=config.SYNC_CHUNK_DAYS), end)
@@ -162,6 +188,7 @@ def run_sync() -> bool:
             known = {r["tid"]: r["updated_at"] or "" for r in conn.execute("SELECT tid, updated_at FROM titles")}
         stale_before = config.fmt_dt(now - timedelta(days=7))
         need = sorted(t for t in tids if t not in known or known[t] < stale_before)
+        n_titles = len(need)
         for i, batch in enumerate(_chunks(need, 50)):
             STATE["progress"] = f"タイトル取得 {i * 50 + len(batch)}/{len(need)}"
             titles = client.titles(batch)
@@ -180,12 +207,15 @@ def run_sync() -> bool:
         with db.connect() as conn:
             apply_all_tracks(conn)
             db.set_meta(conn, "last_success", stamp)
-            db.set_meta(conn, "last_full_success", stamp)
-        STATE["last_message"] = f"番組 {total} 件 / 作品 {len(tids)} 件を取得（{start:%m/%d}〜{end:%m/%d}）"
+            if not custom:  # 期間指定の取得では「初回取得済み」にしない
+                db.set_meta(conn, "last_full_success", stamp)
+        STATE["last_message"] = f"番組 {total} 件 / 作品 {len(tids)} 件を取得（{start:%m/%d}〜{end - timedelta(seconds=1):%m/%d}）"
         log.info(STATE["last_message"])
+        _finish_log(log_id, "ok", total, n_titles, STATE["last_message"])
     except Exception as e:
         log.exception("sync failed")
         STATE["last_error"] = str(e)
+        _finish_log(log_id, "error", total, n_titles, str(e))
     finally:
         client.close()
         STATE.update(running=False, progress=None, last_finished=config.fmt_dt(config.now_jst()))
@@ -193,11 +223,11 @@ def run_sync() -> bool:
     return True
 
 
-def trigger_async() -> bool:
+def trigger_async(start_date: datetime | None = None, end_date: datetime | None = None, trigger: str = "manual") -> bool:
     if _lock.locked():
         return False
     STATE.update(running=True, progress="開始")
-    threading.Thread(target=run_sync, name="sync", daemon=True).start()
+    threading.Thread(target=run_sync, args=(start_date, end_date, trigger), name="sync", daemon=True).start()
     return True
 
 
@@ -212,7 +242,7 @@ def _scheduler_loop():
                 elapsed = config.now_jst() - datetime.strptime(last, "%Y-%m-%dT%H:%M")
                 due = elapsed >= timedelta(hours=config.SYNC_INTERVAL_HOURS)
             if due and (not first or config.SYNC_ON_STARTUP):
-                run_sync()
+                run_sync(trigger="auto")
         except Exception:
             log.exception("scheduler error")
         first = False

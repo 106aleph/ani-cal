@@ -22,7 +22,7 @@ button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 button.danger { color: var(--danger); }
 button.small { padding: 2px 8px; font-size: 12px; }
-select, input[type=text], input[type=search], input[type=number], input[type=datetime-local], input:not([type]), textarea {
+select, input[type=text], input[type=search], input[type=number], input[type=datetime-local], input[type=date], input:not([type]), textarea {
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
@@ -139,6 +139,12 @@ main { padding: 12px 16px 40px; max-width: 1400px; margin: 0 auto; }
 .badge.src-generated { color: #e67700; border-color: #e6770055; }
 .badge.edited { color: var(--danger); border-color: #c93a3a55; }
 .badge.backlog { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+/* log */
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; }
+.logtable td { cursor: default; white-space: nowrap; }
+.logtable td:last-child { white-space: normal; }
+.logtable tr.logerr td:last-child { color: var(--danger); }
 
 /* dialog */
 dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--fg);

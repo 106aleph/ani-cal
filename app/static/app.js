@@ -471,6 +471,24 @@ async function manualAdd() {
   await renderTracks();
 }
 
+/* ============================================================ logs */
+const TRIGGER_LABEL = { auto: '定期', manual: '今すぐ', range: '期間指定' };
+const STATUS_LABEL = { ok: '成功', error: 'エラー', running: '取得中' };
+async function renderLogs() {
+  const logs = await api('/api/logs');
+  const box = $('#log-list');
+  if (!logs.length) { box.innerHTML = '<p class="empty">取得履歴はまだありません。</p>'; return; }
+  const t = s => s ? s.replace('T', ' ') : '—';
+  box.innerHTML = `<table class="eptable logtable"><thead><tr><th>実行日時</th><th>種別</th><th>取得範囲</th><th>結果</th><th>番組</th><th>タイトル</th><th>詳細</th></tr></thead><tbody>
+    ${logs.map(l => `<tr class="${l.status === 'error' ? 'logerr' : ''}">
+      <td>${esc(t(l.started_at))}</td>
+      <td>${esc(TRIGGER_LABEL[l.trigger] || l.trigger)}</td>
+      <td>${esc(l.range_start || '—')} 〜 ${esc(l.range_end || '—')}</td>
+      <td><span class="badge ${l.status === 'error' ? 'edited' : l.status === 'ok' ? 'src-sync' : 'src-generated'}">${esc(STATUS_LABEL[l.status] || l.status)}</span></td>
+      <td>${l.programs ?? '—'}</td><td>${l.titles ?? '—'}</td>
+      <td class="muted small">${esc(l.message || '')}</td></tr>`).join('')}</tbody></table>`;
+}
+
 /* ============================================================ sync status */
 let pollTimer = null;
 async function refreshStatus() {
@@ -488,6 +506,7 @@ async function refreshStatus() {
   }
   el.title = s.last_message || '';
   $('#sync-btn').disabled = s.running;
+  $('#sync-range-btn').disabled = s.running;
   clearTimeout(pollTimer);
   if (s.running) pollTimer = setTimeout(refreshStatus, 3000);
   else if (refreshStatus._wasRunning) { state.catalog = null; renderTab(); }
@@ -500,6 +519,7 @@ async function renderTab() {
   $$('.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + state.tab));
   if (state.tab === 'calendar') await renderCalendar();
   else if (state.tab === 'catalog') await loadCatalog();
+  else if (state.tab === 'logs') await renderLogs();
   else await renderTracks();
 }
 
@@ -579,6 +599,24 @@ function init() {
   $('#sync-btn').addEventListener('click', guard(async () => {
     const r = await api('/api/sync', { method: 'POST' });
     toast(r.started ? '取得を開始しました' : '取得中です');
+    refreshStatus._wasRunning = true;
+    await refreshStatus();
+  }));
+
+  $('#sync-range-btn').addEventListener('click', guard(async () => {
+    const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
+    const r = await formDialog({
+      title: '期間を指定して取得', submit: '取得',
+      html: '<p class="muted small">指定した期間の配信予定をしょぼいカレンダーから取得します（最大400日・2日ごとに1.5秒間隔なので、長い期間は数分かかります）。放送開始が古い作品や、先の予定を一覧に出したいときに使います。</p>',
+      fields: [
+        { name: 'start', label: '開始日', type: 'date', value: store.get('syncStart', day(-30)), required: true },
+        { name: 'end', label: '終了日', type: 'date', value: store.get('syncEnd', day(180)), required: true },
+      ],
+    });
+    if (r.action !== 'ok') return;
+    store.set('syncStart', r.values.start); store.set('syncEnd', r.values.end);
+    const res = await api('/api/sync', { method: 'POST', body: r.values });
+    toast(res.started ? '取得を開始しました' : '取得中です');
     refreshStatus._wasRunning = true;
     await refreshStatus();
   }));

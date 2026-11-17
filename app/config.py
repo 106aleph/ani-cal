@@ -52,6 +52,7 @@ SKIP_REBROADCAST = _bool("SKIP_REBROADCAST", True)
 # 新作一覧
 NEW_MONTHS_BACK = _int("NEW_MONTHS_BACK", 3)
 NEW_MONTHS_FORWARD = _int("NEW_MONTHS_FORWARD", 6)
+NEW_MONTHS_BACK_AIRING = _int("NEW_MONTHS_BACK_AIRING", 12)  # 放送中の作品は、開始がこの月数前までなら新作一覧に載せる
 NEW_CATS = _intset("NEW_CATS", "1")                          # しょぼいカレンダーのCat (1=アニメ)
 NET_GROUP_IDS = _intset("NET_GROUP_IDS")
 NET_GROUP_KEYWORDS = [k for k in os.environ.get(

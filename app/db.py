@@ -80,6 +80,20 @@ CREATE TABLE IF NOT EXISTS episodes(
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_track ON episodes(track_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_start ON episodes(start_at);
+
+-- 取得履歴（いつ・どの範囲を取得したか）。trigger: auto=定期 / manual=今すぐ / range=期間指定
+CREATE TABLE IF NOT EXISTS sync_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  trigger TEXT NOT NULL,
+  range_start TEXT,
+  range_end TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  programs INTEGER,
+  titles INTEGER,
+  message TEXT
+);
 """
 
 
@@ -98,6 +112,8 @@ def init() -> None:
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        # 再起動などで途中終了した取得を「中断」にする
+        conn.execute("UPDATE sync_log SET status='error', message='中断されました' WHERE status='running'")
         conn.commit()
     finally:
         conn.close()

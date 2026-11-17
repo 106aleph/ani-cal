@@ -158,9 +158,35 @@ def status():
                 "counts": counts, "now": config.fmt_dt(config.now_jst())}
 
 
+class SyncIn(BaseModel):
+    start: str | None = None  # YYYY-MM-DD
+    end: str | None = None    # YYYY-MM-DD（この日を含む）
+
+
+MAX_SYNC_DAYS = 400
+
+
 @app.post("/api/sync", status_code=202)
-def trigger_sync():
-    return {"started": sync.trigger_async()}
+def trigger_sync(body: SyncIn | None = None):
+    s = e = None
+    if body and (body.start or body.end):
+        try:
+            s = datetime.strptime(body.start, "%Y-%m-%d")
+            e = datetime.strptime(body.end, "%Y-%m-%d") + timedelta(days=1)
+        except (TypeError, ValueError):
+            raise HTTPException(422, "開始日と終了日を YYYY-MM-DD で指定してください")
+        if e <= s:
+            raise HTTPException(422, "終了日は開始日以降にしてください")
+        if (e - s).days > MAX_SYNC_DAYS:
+            raise HTTPException(422, f"期間は最大 {MAX_SYNC_DAYS} 日までです")
+    return {"started": sync.trigger_async(s, e, "range" if s else "manual")}
+
+
+@app.get("/api/logs")
+def sync_logs(limit: int = Query(200, ge=1, le=500)):
+    with db.connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
 
 
 # ---------------------------------------------------------------- 新作一覧
@@ -174,7 +200,7 @@ def catalog():
         rows = conn.execute(
             """SELECT t.tid, t.title, t.cat, t.first_year, t.first_month,
                       p.chid, c.name AS chname, c.gid, g.name AS gname,
-                      MIN(p.start_at) AS first_start,
+                      MIN(p.start_at) AS first_start, MAX(p.start_at) AS last_start,
                       MIN(CASE WHEN p.count=1 THEN p.start_at END) AS ep1_start,
                       COUNT(*) AS n
                FROM programs p
@@ -201,6 +227,7 @@ def catalog():
             "group": r["gname"],
             "is_net": is_net_group(r["gid"], r["gname"]),
             "first_start": r["ep1_start"] or r["first_start"],
+            "last_start": r["last_start"],
             "has_ep1": r["ep1_start"] is not None,
             "count": r["n"],
             "track_id": tracked.get((r["tid"], r["chid"])),
@@ -212,7 +239,10 @@ def catalog():
         y, m = it["first_year"], it["first_month"]
         if not (y and m):
             y, m = int(earliest[:4]), int(earliest[5:7])
-        if not (lo <= y * 12 + m - 1 <= hi):
+        idx = y * 12 + m - 1
+        # 放送開始が範囲内、または「まだ放送中」（今以降の予定がある）なら、開始が古い分割・長期クールも載せる
+        airing = max(c["last_start"] for c in it["channels"]) >= config.fmt_dt(now)
+        if not (lo <= idx <= hi or (airing and idx_now - config.NEW_MONTHS_BACK_AIRING <= idx <= hi)):
             continue
         it["season"] = season_of(y, m)
         it["season_key"] = y * 10 + (m - 1) // 3

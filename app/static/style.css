@@ -54,13 +54,15 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 
 /* header */
 .topbar { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center;
-  padding: 10px 18px; background: rgba(22, 26, 33, .92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line); }  /* backdrop-filter は fixed の下部タブの基準を壊すので使わない */
 .topbar h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tabs button { border: none; background: none; padding: 6px 14px; border-radius: 8px; color: var(--muted); }
 .tabs button:hover { background: var(--panel-2); color: var(--fg); }
 .tabs button.active { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
-.sync { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+.sync { margin-left: auto; display: flex; gap: 6px 12px; align-items: center; font-size: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.sync-btns { display: inline-flex; gap: 6px; }
+#sync-status { max-width: 36em; }
 #sync-status.running { color: var(--accent); }
 #sync-status.err { color: var(--danger); }
 
@@ -75,6 +77,8 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 .seg button + button { margin-left: -1px; }
 .seg button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; position: relative; }
 .nav-month { display: flex; gap: 4px; align-items: center; }
+.cal-toolbar { justify-content: space-between; margin-bottom: 6px; }
+.opts { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
 .nav-month strong { margin-left: 10px; font-size: 17px; min-width: 7em; font-variant-numeric: tabular-nums; }
 
 /* month */
@@ -195,12 +199,86 @@ input[type=date], input[type=datetime-local] { color-scheme: dark; }
 #toast.show { opacity: 1; transform: translateX(-50%); }
 #toast.err { background: #4a1f24; border-color: var(--danger); color: #ffd7d7; }
 
+/* ===== スマホ・狭い画面 ===== */
 @media (max-width: 720px) {
-  main { padding: 10px; }
-  .topbar { padding: 8px 12px; }
-  .day { min-height: 72px; }
-  .month .ev .time, .month .ev .w { display: none; }
-  .month .ev { font-size: 10px; padding: 1px 3px; }
-  .sync { margin-left: 0; width: 100%; }
-  .eptable th:nth-child(4), .eptable td:nth-child(4) { display: none; }
+  body { font-size: 15px; }
+  main { padding: 10px 10px calc(76px + env(safe-area-inset-bottom, 0px)); }
+
+  /* 上部: タイトルと取得ボタン、その下に状態表示。タブは親指で届く下部バーへ */
+  .topbar { padding: 8px 12px; padding-top: calc(8px + env(safe-area-inset-top, 0px)); gap: 4px 8px; }
+  .topbar h1 { font-size: 15px; }
+  .sync { display: contents; }
+  .sync-btns { order: 2; margin-left: auto; }
+  #sync-status { order: 3; width: 100%; max-width: none; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    background: rgba(22, 26, 33, .96); backdrop-filter: blur(10px); border-top: 1px solid var(--line-strong);
+    padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .tabs button { border-radius: 0; padding: 14px 2px; font-size: 13px; min-height: 52px; }
+  .tabs button.active { background: transparent; color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
+
+  /* ツールバー: 日付移動を1行、表示切替は全幅 */
+  .toolbar { gap: 8px 12px; }
+  .cal-toolbar { flex-direction: column; align-items: stretch; }
+  .nav-month { justify-content: space-between; }
+  .nav-month strong { margin: 0; min-width: 0; flex: 1; text-align: center; font-size: 16px; order: 2; }
+  .nav-month #cal-prev { order: 1; } .nav-month #cal-today { order: 3; } .nav-month #cal-next { order: 4; }
+  .nav-month button { min-width: 44px; }
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .seg button { padding: 9px 0; }
+  .opts { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .toolbar select, .toolbar input[type=search] { flex: 1 1 100%; width: 100%; }
+
+  /* 月表示: 予定は小さな色帯（タップで週の一覧へ） */
+  .day { min-height: 66px; padding: 3px 2px; cursor: pointer; }
+  .month .ev { pointer-events: none; height: 6px; padding: 0; margin: 2px 2px; border-left-width: 0; background: hsl(var(--h) 65% 58%); font-size: 0; overflow: hidden; }
+  .month .ev > * { display: none; }
+  .month .ev.done { opacity: .3; }
+  .dn { font-size: 12px; text-align: center; }
+
+  /* 一覧（週・リスト）: タップしやすく */
+  .evlist .ev { padding: 10px 12px; font-size: 15px; gap: 8px; }
+  .ev .w { width: 22px; height: 22px; }
+  .dayhead { font-size: 15px; margin-top: 16px; }
+
+  /* 登録作品 */
+  .track summary { padding: 12px; }
+  .track .tt { min-width: 100%; }
+  .actions button { flex: 1 1 calc(50% - 6px); }
+  .actions .spacer { display: none; }
+  .eps .eptable th:nth-child(4), .eps .eptable td:nth-child(4), .eps .eptable th:nth-child(5), .eps .eptable td:nth-child(5) { display: none; }
+  .eptable td, .eptable th { padding: 9px 6px; }
+  .eptable input[type=checkbox] { width: 22px; height: 22px; }
+  /* ログ: 表をカード表示に */
+  .tablewrap { padding: 0; background: none; border: none; }
+  .logtable, .logtable tbody { display: block; }
+  .logtable thead { display: none; }
+  .logtable tr { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; margin-bottom: 8px; }
+  .logtable td { display: flex; gap: 10px; border: 0; padding: 2px 0; white-space: normal; }
+  .logtable td::before { content: attr(data-l); flex: 0 0 4.5em; color: var(--muted); font-size: 12px; padding-top: 1px; }
+
+  /* ダイアログは下からのシート */
+  dialog { width: 100vw; max-width: 100vw; margin: auto 0 0; border-radius: 16px 16px 0 0; max-height: 92vh; overflow: auto;
+    padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  dialog menu { flex-wrap: wrap; }
+  dialog menu button { flex: 1 1 auto; padding: 10px 14px; }
+  dialog menu .spacer { display: none; }
+  select, input, textarea { font-size: 16px; } /* iOS のフォーカス時ズーム防止 */
+  #toast { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* タッチ操作 */
+@media (pointer: coarse) {
+  button, .btn { min-height: 40px; }
+  button.small { min-height: 34px; }
+  input[type=checkbox] { width: 20px; height: 20px; }
+}
+
+/* 広い画面: 余白と文字を少し大きく */
+@media (min-width: 1100px) {
+  .day { min-height: 128px; }
+  .ev { font-size: 12.5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
 }

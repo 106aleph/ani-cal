@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>アニメ配信カレンダー</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%232f6fde'/%3E%3Ctext x='50' y='73' font-size='68' font-weight='700' font-family='Arial,Helvetica,sans-serif' text-anchor='middle' fill='%23fff'%3EA%3C/text%3E%3C/svg%3E">
 <link rel="manifest" href="/static/manifest.json">
@@ -15,34 +15,38 @@
 <body>
 <header class="topbar">
   <h1>アニメ配信カレンダー</h1>
-  <nav class="tabs" role="tablist">
+  <nav class="tabs" role="tablist" aria-label="画面">
     <button data-tab="calendar" class="active">カレンダー</button>
     <button data-tab="catalog">新作一覧</button>
     <button data-tab="tracks">登録作品</button>
     <button data-tab="logs">ログ</button>
   </nav>
   <div class="sync">
-    <span id="sync-status" class="muted">-</span>
-    <button id="sync-btn" title="しょぼいカレンダーから再取得">今すぐ取得</button>
-    <button id="sync-range-btn" title="期間を指定して取得（放送中の作品や先の予定が出ないとき）">期間指定</button>
+    <span id="sync-status" class="muted" aria-live="polite">-</span>
+    <span class="sync-btns">
+      <button id="sync-range-btn" title="期間を指定して取得（放送中の作品や先の予定が出ないとき）">期間指定</button>
+      <button id="sync-btn" class="primary" title="しょぼいカレンダーから更新分を取得">今すぐ取得</button>
+    </span>
   </div>
 </header>
 
 <main>
   <!-- カレンダー -->
   <section id="tab-calendar" class="tab active">
-    <div class="toolbar">
-      <div class="seg">
-        <button data-view="month" class="active">月</button>
-        <button data-view="week">週</button>
-        <button data-view="list">リスト</button>
-      </div>
+    <div class="toolbar cal-toolbar">
       <div class="nav-month">
         <button id="cal-prev" aria-label="前へ">‹</button>
         <button id="cal-today">今日</button>
         <button id="cal-next" aria-label="次へ">›</button>
         <strong id="cal-label"></strong>
       </div>
+      <div class="seg" role="group" aria-label="表示">
+        <button data-view="month" class="active">月</button>
+        <button data-view="week">週</button>
+        <button data-view="list">リスト</button>
+      </div>
+    </div>
+    <div class="toolbar opts">
       <label class="check"><input type="checkbox" id="opt-late"> 深夜を24時以降表記（5時区切り）</label>
       <label class="check"><input type="checkbox" id="opt-hide-watched"> 視聴済みを隠す</label>
     </div>
@@ -68,6 +72,7 @@
   <section id="tab-tracks" class="tab">
     <div class="toolbar">
       <button id="track-add-manual" class="primary">＋ 手動で作品を追加</button>
+      <span class="spacer"></span>
       <a class="btn" href="/calendar.ics" title="Googleカレンダー等で購読できます">ICS</a>
     </div>
     <div id="track-list"></div>

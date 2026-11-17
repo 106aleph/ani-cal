@@ -181,6 +181,9 @@ function evHtml(e) {
   </div>`;
 }
 
+const narrowMq = window.matchMedia('(max-width: 720px)');
+const isNarrow = () => narrowMq.matches;
+
 let calEvents = [];
 async function renderCalendar() {
   const { start, end } = calRange();
@@ -194,8 +197,10 @@ async function renderCalendar() {
   const today = ymd(new Date());
 
   $('#cal-month').hidden = state.view !== 'month';
-  $('#cal-week').hidden = state.view !== 'week';
-  $('#cal-list').hidden = state.view !== 'list';
+  // 狭い画面（スマホ）では、週ビューは日ごとの縦リスト（アジェンダ）で表示する
+  const weekGrid = state.view === 'week' && !isNarrow();
+  $('#cal-week').hidden = !weekGrid;
+  $('#cal-list').hidden = !(state.view === 'list' || (state.view === 'week' && isNarrow()));
   $$('.seg [data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
 
   if (state.view === 'month') {
@@ -205,11 +210,11 @@ async function renderCalendar() {
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       const k = ymd(d);
       const out = d.getMonth() !== c.getMonth();
-      h += `<div class="day ${out ? 'out' : ''} ${k === today ? 'today' : ''} wd${d.getDay()}">
+      h += `<div class="day ${out ? 'out' : ''} ${k === today ? 'today' : ''} wd${d.getDay()}" data-date="${k}">
         <div class="dn">${d.getDate()}</div>${(byDay[k] || []).map(evHtml).join('')}</div>`;
     }
     $('#cal-month').innerHTML = h + '</div>';
-  } else if (state.view === 'week') {
+  } else if (weekGrid) {
     const last = new Date(end - 864e5);
     $('#cal-label').textContent = `${start.getFullYear()}/${start.getMonth() + 1}/${start.getDate()} 〜 ${last.getMonth() + 1}/${last.getDate()}`;
     const PX = 1.6, DUR = 30; // 1分あたりpx / 1話の表示長(分)
@@ -254,7 +259,7 @@ async function renderCalendar() {
     $('#cal-week').innerHTML = `<div class="tgrid"><div class="thead">${head}</div><div class="tbody">${cols}</div></div>`;
   } else {
     $('#cal-label').textContent = `${ymd(start).slice(5).replace('-', '/')} 〜 ${ymd(new Date(end - 864e5)).slice(5).replace('-', '/')}`;
-    const backlog = (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start));
+    const backlog = state.view === 'list' ? (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start)) : [];
     let h = '';
     if (backlog.length) {
       h += `<h3 class="dayhead">未視聴（配信済み） <span class="muted">${backlog.length}件</span></h3><div class="evlist">${backlog.map(e =>
@@ -264,7 +269,7 @@ async function renderCalendar() {
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       const k = ymd(d);
       const list = byDay[k] || [];
-      h += `<h3 class="dayhead ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</h3>`;
+      h += `<h3 class="dayhead ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）${k === today ? ' ・今日' : ''}</h3>`;
       h += list.length ? `<div class="evlist">${list.map(evHtml).join('')}</div>` : '<p class="muted small empty">予定なし</p>';
     }
     $('#cal-list').innerHTML = h;
@@ -494,12 +499,12 @@ async function renderLogs() {
   const t = s => s ? s.replace('T', ' ') : '—';
   box.innerHTML = `<table class="eptable logtable"><thead><tr><th>実行日時</th><th>種別</th><th>取得範囲</th><th>結果</th><th>番組</th><th>タイトル</th><th>詳細</th></tr></thead><tbody>
     ${logs.map(l => `<tr class="${l.status === 'error' ? 'logerr' : ''}">
-      <td>${esc(t(l.started_at))}</td>
-      <td>${esc(TRIGGER_LABEL[l.trigger] || l.trigger)}</td>
-      <td>${esc(l.range_start || '—')} 〜 ${esc(l.range_end || '—')}</td>
-      <td><span class="badge ${l.status === 'error' ? 'edited' : l.status === 'ok' ? 'src-sync' : 'src-generated'}">${esc(STATUS_LABEL[l.status] || l.status)}</span></td>
-      <td>${l.programs ?? '—'}</td><td>${l.titles ?? '—'}</td>
-      <td class="muted small">${esc(l.message || '')}</td></tr>`).join('')}</tbody></table>`;
+      <td data-l="実行日時">${esc(t(l.started_at))}</td>
+      <td data-l="種別">${esc(TRIGGER_LABEL[l.trigger] || l.trigger)}</td>
+      <td data-l="取得範囲">${esc(l.range_start || '—')} 〜 ${esc(l.range_end || '—')}</td>
+      <td data-l="結果"><span class="badge ${l.status === 'error' ? 'edited' : l.status === 'ok' ? 'src-sync' : 'src-generated'}">${esc(STATUS_LABEL[l.status] || l.status)}</span></td>
+      <td data-l="番組">${l.programs ?? '—'}</td><td data-l="タイトル">${l.titles ?? '—'}</td>
+      <td class="muted small" data-l="詳細">${esc(l.message || '')}</td></tr>`).join('')}</tbody></table>`;
 }
 
 /* ============================================================ sync status */
@@ -561,6 +566,16 @@ function init() {
   $('#opt-late').addEventListener('change', guard(async e => { state.late = e.target.checked; store.set('late', state.late); await renderTab(); }));
   $('#opt-hide-watched').addEventListener('change', guard(async e => { state.hideWatched = e.target.checked; store.set('hideWatched', state.hideWatched); await renderCalendar(); }));
   bindEventClicks($('#cal-month'), renderCalendar);
+  // スマホの月表示は予定が小さな帯なので、日付をタップするとその週の一覧に移る
+  $('#cal-month').addEventListener('click', guard(async ev => {
+    const day = ev.target.closest('.day');
+    if (!isNarrow() || !day?.dataset.date) return;
+    const [Y, M, D] = day.dataset.date.split('-').map(Number);
+    state.cursor = new Date(Y, M - 1, D); state.view = 'week'; store.set('view', 'week');
+    await renderCalendar();
+    window.scrollTo({ top: 0 });
+  }));
+  narrowMq.addEventListener('change', () => { if (state.tab === 'calendar') renderCalendar().catch(e => toast(e.message, true)); });
   bindEventClicks($('#cal-week'), renderCalendar);
   bindEventClicks($('#cal-list'), renderCalendar);
 

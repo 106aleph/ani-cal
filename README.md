@@ -105,3 +105,7 @@ sudo tailscale serve --https=443 off                     # serve の設定を外
 ## 連絡先
 
 個人用のアプリです。取得について問題があれば、[GitHub の Issues](https://github.com/106aleph/ani-cal/issues) か [Misskey](https://misskey.106aleph.xyz/@106aleph) からご連絡ください。User-Agent は `AnimeCalendar/1.0 (+https://github.com/106aleph/ani-cal)` です。
+
+## ライセンス
+
+[MIT License](LICENSE)

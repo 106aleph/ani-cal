@@ -12,7 +12,7 @@
 ## セットアップ
 
 ```bash
-cp .env.example .env              # 必要なら編集
+cp .env.example .env              # SYOBOI_UA_URL を設定する（下記）
 docker compose up -d --build
 docker compose logs -f            # 初回取得は数分
 sudo tailscale serve --bg 8000    # APP_PORT を変えた場合はその番号
@@ -20,6 +20,8 @@ sudo tailscale serve --bg 8000    # APP_PORT を変えた場合はその番号
 
 `https://<ホスト名>.<tailnet名>.ts.net/` を tailnet 内の端末で開きます。PWA として、ブラウザからホーム画面やデスクトップにインストールできます。
 
+- `.env` の `SYOBOI_UA_URL` に、連絡方法を載せた公開ページのURLを設定してください（例: `SYOBOI_UA_URL=https://github.com/<ユーザー名>/ani-cal`）。しょぼいカレンダーへのリクエストの User-Agent に `AnimeCalendar/1.0 (+URL)` として付き、問題があったときに運営から連絡できるようになります。変更後は `docker compose up -d` で反映します。
+- 通知（Web Push）を使うときは、HTTPS で開いた画面の右上「通知」から有効にします（詳細は「通知」の節）。
 - コンテナは `127.0.0.1` にしか公開しません。アクセスは `tailscale serve` 経由のみです。
 - 認証は持たず、Tailscale の ACL で制御する前提です。ルート `/` 前提のため、サブパス公開（`--set-path`）は非対応です。他のサービスと併用するときは `--https=8443` など別ポートにしてください。
 

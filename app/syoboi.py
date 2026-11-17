@@ -69,7 +69,7 @@ class SyoboiClient:
                 r.raise_for_status()
                 root = ET.fromstring(r.content)
                 code = root.findtext("Result/Code")
-                if code and code != "200":
+                if code and code not in ("200", "404"):  # 404=該当データなし→0件
                     msg = root.findtext("Result/Message") or ""
                     raise SyoboiError(f"{params.get('Command')}: code={code} {msg}")
                 return root

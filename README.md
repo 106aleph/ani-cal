@@ -100,3 +100,7 @@ sudo tailscale serve --https=443 off                     # serve の設定を外
 | GET/POST | `/api/push/{key,settings,subscribe,unsubscribe,test}` | 通知の購読と設定 |
 | GET | `/api/calendar?start=&end=` | 期間内の話 |
 | GET | `/calendar.ics` | iCalendar |
+
+## 連絡先
+
+このアプリは個人用です。しょぼいカレンダーのデータを [bot向けルール](https://docs.cal.syoboi.jp/rule/bot/) に沿って取得しており、User-Agent は `AnimeCalendar/1.0 (+https://github.com/106aleph/ani-cal)` です。取得について問題があれば、[GitHub の Issues](https://github.com/106aleph/ani-cal/issues) か、[Misskey](https://misskey.106aleph.xyz/@106aleph) からご連絡ください。

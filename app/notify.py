@@ -72,7 +72,8 @@ def _send(sub: dict, payload: dict, ttl: int = 600) -> None:
         subscription_info={"endpoint": sub["endpoint"], "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
         data=json.dumps(payload, ensure_ascii=False),
         vapid_private_key=_vapid(), vapid_claims={"sub": _subject()},
-        ttl=ttl, timeout=10)
+        # Urgency: high … 端末が省電力（Doze）中でも即時配信するよう Push サービスに要求する（時刻通知なので）
+        ttl=ttl, timeout=10, headers={"Urgency": "high"})
 
 
 def _drop(endpoint: str) -> None:

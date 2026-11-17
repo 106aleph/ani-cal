@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS episodes(
 CREATE INDEX IF NOT EXISTS idx_episodes_track ON episodes(track_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_start ON episodes(start_at);
 
--- 取得履歴（いつ・どの範囲を取得したか）。trigger: auto=定期 / manual=今すぐ / range=期間指定
+-- 取得履歴（いつ・どの範囲を取得したか）。trigger: auto=定期 / startup=起動時 / manual=今すぐ / range=期間指定
 CREATE TABLE IF NOT EXISTS sync_log(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at TEXT NOT NULL,

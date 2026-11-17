@@ -485,7 +485,7 @@ async function manualAdd() {
 }
 
 /* ============================================================ logs */
-const TRIGGER_LABEL = { auto: '定期', manual: '今すぐ', range: '期間指定' };
+const TRIGGER_LABEL = { auto: '定期', startup: '起動時', manual: '今すぐ', range: '期間指定' };
 const STATUS_LABEL = { ok: '成功', error: 'エラー', running: '取得中' };
 async function renderLogs() {
   const logs = await api('/api/logs');

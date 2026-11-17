@@ -242,7 +242,7 @@ def _scheduler_loop():
                 elapsed = config.now_jst() - datetime.strptime(last, "%Y-%m-%dT%H:%M")
                 due = elapsed >= timedelta(hours=config.SYNC_INTERVAL_HOURS)
             if due and (not first or config.SYNC_ON_STARTUP):
-                run_sync(trigger="auto")
+                run_sync(trigger="startup" if first else "auto")
         except Exception:
             log.exception("scheduler error")
         first = False

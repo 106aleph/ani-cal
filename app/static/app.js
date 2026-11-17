@@ -112,6 +112,68 @@ function formDialog({ title, fields = [], submit = '保存', extra = [], html = 
 const confirmDialog = async (msg, ok = 'OK') =>
   (await formDialog({ title: msg, submit: ok })).action === 'ok';
 
+/* ============================================================ 通知（Web Push） */
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64ToU8 = s => {
+  const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(b, c => c.charCodeAt(0));
+};
+async function pushReg() {
+  await navigator.serviceWorker.register('/sw.js');
+  return navigator.serviceWorker.ready;
+}
+
+async function notifySettings() {
+  const note = (h) => formDialog({ title: '通知', submit: 'OK', html: h });
+  if (!pushSupported()) {
+    await note(`<p class="muted small">このブラウザは通知に対応していません。iPhone / iPad では、共有メニューの「ホーム画面に追加」でインストールしたアプリ（iOS 16.4 以降）から設定してください。また、通知には HTTPS（tailscale serve）での接続が必要です。</p>`);
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    await note('<p class="muted small">通知がブラウザで拒否されています。ブラウザ（またはOS）のサイト設定で通知を許可してから、もう一度開いてください。</p>');
+    return;
+  }
+  const reg = await pushReg();
+  let sub = await reg.pushManager.getSubscription();
+  let st = sub ? await api('/api/push/settings?endpoint=' + encodeURIComponent(sub.endpoint)) : { subscribed: false, lead_min: 10 };
+  if (sub && !st.subscribed) { await sub.unsubscribe(); sub = null; } // サーバー側で購読が消えている
+  const on = !!sub;
+  const r = await formDialog({
+    title: '通知', submit: on ? '保存' : '通知を有効にする',
+    html: `<p class="muted small">カレンダーに登録した作品（視聴済みでない話）の配信開始の少し前に、この端末へ通知します。<strong>この端末の通知は現在 ${on ? 'オン' : 'オフ'}</strong>です。設定は端末ごとです。アプリを開いていなくても届きます。</p>`,
+    fields: [{ name: 'lead', label: '何分前に通知するか', type: 'number', min: 0, step: 1, value: st.lead_min, required: true,
+      help: '0 で開始時刻ちょうど。最大 1440（24時間前）。' }],
+    extra: on ? [{ label: 'テスト通知', value: 'test' }, { label: '通知を止める', value: 'off', cls: 'danger' }] : [],
+  });
+  if (r.action === 'cancel') return;
+  if (r.action === 'off') {
+    await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+    await sub.unsubscribe();
+    toast('この端末の通知を止めました');
+    return;
+  }
+  if (r.action === 'test') {
+    await api('/api/push/test', { method: 'POST', body: { endpoint: sub.endpoint } });
+    toast('テスト通知を送りました');
+    return;
+  }
+  const lead = Math.round(r.values.lead);
+  if (!(lead >= 0 && lead <= 1440)) throw new Error('0〜1440 の分数を入力してください');
+  if (on) {
+    await api('/api/push/settings', { method: 'POST', body: { endpoint: sub.endpoint, lead_min: lead } });
+    toast(`開始の${lead}分前に通知します`);
+    return;
+  }
+  if (await Notification.requestPermission() !== 'granted') throw new Error('通知が許可されませんでした');
+  const { key } = await api('/api/push/key');
+  sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+  const j = sub.toJSON();
+  try {
+    await api('/api/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys, lead_min: lead } });
+  } catch (e) { await sub.unsubscribe(); throw e; }
+  toast(`通知を有効にしました（開始の${lead}分前）`);
+}
+
 /* ============================================================ episode edit */
 const SRC_LABEL = { sync: '取得', manual: '手動', generated: '予測' };
 function badges(e) {
@@ -773,6 +835,8 @@ function init() {
     await refreshStatus();
   }));
 
+  $('#notify-btn').addEventListener('click', guard(notifySettings));
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { });
   renderTab().catch(e => toast(e.message, true));
   refreshStatus().catch(() => { });
   setInterval(() => refreshStatus().catch(() => { }), 60000);

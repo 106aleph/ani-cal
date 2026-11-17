@@ -97,6 +97,21 @@ CREATE TABLE IF NOT EXISTS sync_log(
   message TEXT,
   duration_sec REAL
 );
+-- Web Push 通知（端末ごとの購読と、開始何分前に通知するか）
+CREATE TABLE IF NOT EXISTS push_subs(
+  endpoint TEXT PRIMARY KEY,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  lead_min INTEGER NOT NULL DEFAULT 10,
+  created_at TEXT NOT NULL
+);
+-- 送信済み（同じ話・同じ開始時刻を二重に通知しない）
+CREATE TABLE IF NOT EXISTS push_sent(
+  endpoint TEXT NOT NULL,
+  ep_id INTEGER NOT NULL,
+  start_at TEXT NOT NULL,
+  PRIMARY KEY(endpoint, ep_id, start_at)
+);
 """
 
 

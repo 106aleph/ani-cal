@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import config
 import db
+import notify
 import sync
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -23,10 +24,12 @@ SEASONS = ["冬", "春", "夏", "秋"]
 async def lifespan(_app):
     db.init()
     sync.start_scheduler()
+    notify.start()
     yield
 
 
 app = FastAPI(title="アニメ配信カレンダー", lifespan=lifespan)
+app.include_router(notify.router)
 
 
 # ---------------------------------------------------------------- helpers
@@ -605,6 +608,12 @@ def ics(unwatched_only: bool = False):
 
 # ---------------------------------------------------------------- static
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.get("/sw.js")
+def service_worker():
+    # Service Worker は scope を「/」にするためルートから配信する
+    return FileResponse(STATIC / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/")

@@ -264,6 +264,8 @@ def run_sync(start_date: datetime | None = None, end_date: datetime | None = Non
         with db.connect() as conn:
             apply_all_tracks(conn)
             db.set_meta(conn, "last_success", stamp)
+            if mode != "diff":  # 日付範囲を取得したときだけ、取得済み期間に加える
+                db.add_coverage(conn, label_s, label_e)
             if mode != "range":  # 期間指定の取得では差分の基準時刻を進めない（余裕を見て5分前）
                 db.set_meta(conn, "prog_since", (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S"))
         kind = {"diff": "差分", "full": "初回", "range": "期間指定"}[mode]

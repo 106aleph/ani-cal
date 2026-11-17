@@ -1,7 +1,10 @@
 """SQLite スキーマと接続"""
+import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
+from datetime import date, timedelta
 
 import config
 
@@ -140,6 +143,11 @@ def init() -> None:
             conn.execute("ALTER TABLE sync_log ADD COLUMN duration_sec REAL")
         # 再起動などで途中終了した取得を「中断」にする
         conn.execute("UPDATE sync_log SET status='error', message='中断されました' WHERE status='running'")
+        # 取得済み期間の記録が無ければ、既存のログから作る
+        if conn.execute("SELECT 1 FROM meta WHERE key='covered'").fetchone() is None:
+            rows = conn.execute("SELECT range_start, range_end FROM sync_log WHERE status='ok'").fetchall()
+            rs = [(r[0], r[1]) for r in rows if _is_day(r[0]) and _is_day(r[1])]
+            set_meta(conn, "covered", json.dumps(merge_ranges(rs)))
         conn.commit()
     finally:
         conn.close()
@@ -167,3 +175,31 @@ def set_meta(conn, key: str, value) -> None:
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, None if value is None else str(value)),
     )
+
+
+# ---------------------------------------------------------------- 取得済みの期間
+def _is_day(s) -> bool:
+    return bool(s) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) is not None
+
+
+def merge_ranges(ranges) -> list[list[str]]:
+    """日付範囲（YYYY-MM-DD, 両端を含む）を、重なる／隣り合うものどうしでまとめる"""
+    out: list[list[str]] = []
+    for s, e in sorted((s, e) for s, e in ranges if s <= e):
+        if out and date.fromisoformat(s) <= date.fromisoformat(out[-1][1]) + timedelta(days=1):
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return out
+
+
+def get_coverage(conn) -> list[list[str]]:
+    try:
+        return json.loads(get_meta(conn, "covered", "[]") or "[]")
+    except ValueError:
+        return []
+
+
+def add_coverage(conn, start: str, end: str) -> None:
+    """期間指定・初回取得に成功した日付範囲を記録する"""
+    set_meta(conn, "covered", json.dumps(merge_ranges([*map(tuple, get_coverage(conn)), (start, end)])))

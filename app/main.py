@@ -200,6 +200,16 @@ def sync_logs(limit: int = Query(200, ge=1, le=500)):
             "SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
 
 
+@app.get("/api/coverage")
+def coverage():
+    """期間指定・初回取得で取得済みの日付範囲（差分取得は含まない）"""
+    with db.connect() as conn:
+        rs = db.get_coverage(conn)
+    return [{"start": s, "end": e,
+             "days": (datetime.strptime(e, "%Y-%m-%d") - datetime.strptime(s, "%Y-%m-%d")).days + 1}
+            for s, e in rs]
+
+
 @app.post("/api/sync/cancel")
 def cancel_sync():
     return {"cancelled": sync.cancel()}

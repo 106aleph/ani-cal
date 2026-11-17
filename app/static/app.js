@@ -645,7 +645,12 @@ const fmtDur = s => {
 };
 const STATUS_LABEL = { ok: '成功', error: 'エラー', running: '取得中', cancelled: '中断' };
 async function renderLogs() {
-  const logs = await api('/api/logs');
+  const [logs, cover] = await Promise.all([api('/api/logs'), api('/api/coverage')]);
+  $('#log-coverage').innerHTML = `<strong>取得済みの期間</strong>
+    <span class="muted small">（初回・期間指定で取得した日付範囲。定期の差分取得は含みません）</span>
+    <div class="rngs">${cover.length ? cover.slice().reverse().map(r =>
+      `<span class="rng">${esc(r.start)} 〜 ${esc(r.end)} <span class="muted">${r.days}日</span></span>`).join('')
+      : '<span class="muted small">まだありません</span>'}</div>`;
   const box = $('#log-list');
   if (!logs.length) { box.innerHTML = '<p class="empty">取得履歴はまだありません。</p>'; return; }
   const t = s => s ? s.replace('T', ' ') : '—';

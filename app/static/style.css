@@ -195,6 +195,9 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 
 /* log */
 .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
+.coverage { margin: 0 0 14px; }
+.coverage .rngs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rng { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .logtable td { cursor: default; white-space: nowrap; }
 .logtable td:last-child { white-space: normal; }
 .logtable tr.logerr td:last-child { color: var(--danger); }

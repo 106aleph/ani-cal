@@ -19,6 +19,7 @@
     <button data-tab="calendar" class="active">カレンダー</button>
     <button data-tab="catalog">新作一覧</button>
     <button data-tab="tracks">登録作品</button>
+    <button data-tab="archive">視聴済み</button>
     <button data-tab="logs">ログ</button>
   </nav>
   <div class="sync">
@@ -77,7 +78,13 @@
       <span class="spacer"></span>
       <a class="btn" href="/calendar.ics" title="Googleカレンダー等で購読できます">ICS</a>
     </div>
-    <div id="track-list"></div>
+    <div id="track-list" class="track-root" data-archived="0"></div>
+  </section>
+
+  <!-- 視聴済み -->
+  <section id="tab-archive" class="tab">
+    <p class="hint">「登録作品」で全話を視聴済みにして移した作品です。カレンダーや未視聴の一覧には出ません。新しい話が追加されると、自動で登録作品に戻ります。</p>
+    <div id="archive-list" class="track-root" data-archived="1"></div>
   </section>
 
   <!-- ログ -->

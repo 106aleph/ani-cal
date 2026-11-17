@@ -393,34 +393,45 @@ function renderCatalog() {
     return `<div class="work">
       <div class="wt"><strong>${esc(it.title)}</strong> <span class="muted small">${esc(it.season || '')}</span></div>
       <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${plat && ch.name === plat ? 'hl' : ''}"
-          data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}"
-          title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}">
+          data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}" data-archived="${ch.track_archived ? 1 : 0}"
+          title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}${ch.track_archived ? '（視聴済み）' : ''}">
           ${ch.track_id ? '✓ ' : ''}${esc(ch.name)} <span class="when">${esc(fmtFull(ch.first_start))}${ch.has_ep1 ? '〜' : '頃〜'}</span></button>`).join('')
         || '<span class="muted small">（条件に合う媒体なし）</span>'}</div></div>`;
   }).join('');
 }
 
 /* ============================================================ tracks */
-const trackMeta = t => `${t.ep_watched}/${t.ep_total} 視聴
+const allWatched = t => t.ep_total > 0 && t.ep_watched === t.ep_total;
+const trackMeta = t => t.archived
+  ? `<span class="muted small">全${t.ep_total}話 視聴済み ・ ${esc((t.archived_at || '').slice(0, 10))} に移動</span>`
+  : `${t.ep_watched}/${t.ep_total} 視聴
           ${t.backlog ? `<span class="badge backlog">未視聴 ${t.backlog}</span>` : ''}
           <span class="muted small">次回 ${esc(fmtFull(t.next_start))}</span>`;
+const archiveBtnTitle = t => allWatched(t) ? '全話視聴済みの作品を「視聴済み」へ移します' : '全話を視聴済みにすると押せます';
 
 /* 一覧全体を作り直さず、指定作品の件数表示とエピソード表だけ更新する（開閉状態・スクロールを保つ） */
 async function refreshTrack(id) {
-  const tl = $('#track-list');
-  const tracks = await api('/api/tracks');
+  const det = $(`details.track[data-id="${id}"]`);
+  const tl = det.closest('.track-root'), archived = tl.dataset.archived === '1';
+  const tracks = await api(`/api/tracks?archived=${archived}`);
   tl._tracks = tracks;
   const t = tracks.find(x => x.id === id);
-  const meta = $(`details.track[data-id="${id}"] summary .meta`);
-  if (t && meta) meta.innerHTML = trackMeta(t);
+  if (t) {
+    $('summary .meta', det).innerHTML = trackMeta(t);
+    const ab = $('button[data-act="archive"]', det); // 「視聴済みに移す」は全話視聴済みのときだけ押せる
+    if (ab) { ab.disabled = !allWatched(t); ab.title = archiveBtnTitle(t); }
+  }
   await loadEpisodes(id);
 }
 
-async function renderTracks() {
-  const tracks = await api('/api/tracks');
-  const root = $('#track-list');
+async function renderTracks(archived = false) {
+  const root = $(archived ? '#archive-list' : '#track-list');
+  const tracks = await api(`/api/tracks?archived=${archived}`);
+  root._tracks = tracks;
   if (!tracks.length) {
-    root.innerHTML = '<p class="empty">登録作品はまだありません。「新作一覧」で媒体を選んで登録してください。</p>';
+    root.innerHTML = archived
+      ? '<p class="empty">視聴済みの作品はまだありません。「登録作品」で全話を視聴済みにして「視聴済みに移す」を押すと、ここに表示されます。</p>'
+      : '<p class="empty">登録作品はまだありません。「新作一覧」で媒体を選んで登録してください。</p>';
     return;
   }
   root.innerHTML = tracks.map(t => `
@@ -435,11 +446,14 @@ async function renderTracks() {
       </summary>
       <div class="track-body">
         <div class="actions">
+          ${archived ? `
+          <button data-act="unarchive" class="primary" title="登録作品に戻します（カレンダーにまた表示されます）">登録作品に戻す</button>` : `
           <button data-act="edit">作品を編集</button>
           <button data-act="add">話を追加</button>
           <button data-act="gen" title="最後の話の日時から一定間隔で残りの話を作成">間隔で話を作成</button>
           <button data-act="watchall">配信済みを全て視聴済みに</button>
           ${t.tid ? '<button data-act="resync">取得データを再反映</button>' : ''}
+          <button data-act="archive" class="primary" ${allWatched(t) ? '' : 'disabled'} title="${archiveBtnTitle(t)}">視聴済みに移す</button>`}
           <span class="spacer"></span>
           <button data-act="del" class="danger">登録解除</button>
         </div>
@@ -447,7 +461,6 @@ async function renderTracks() {
         <div class="eps" data-id="${t.id}"><p class="muted small">読み込み中…</p></div>
       </div>
     </details>`).join('');
-  root._tracks = tracks;
   for (const d of $$('details.track[open]', root)) loadEpisodes(Number(d.dataset.id));
 }
 
@@ -525,6 +538,13 @@ async function trackAction(t, act) {
   } else if (act === 'resync') {
     const res = await api(`/api/tracks/${t.id}/resync`, { method: 'POST' });
     toast(`取得データ ${res.programs} 件を反映しました（手動修正した話は維持）`);
+  } else if (act === 'archive') {
+    await api(`/api/tracks/${t.id}/archive`, { method: 'POST' });
+    state.catalog = null;
+    toast(`「${t.display_title}」を視聴済みに移しました`);
+  } else if (act === 'unarchive') {
+    await api(`/api/tracks/${t.id}/unarchive`, { method: 'POST' });
+    toast(`「${t.display_title}」を登録作品に戻しました`);
   } else if (act === 'del') {
     if (!await confirmDialog(`「${t.display_title}」の登録を解除しますか？視聴記録も削除されます。`, '解除')) return false;
     await api(`/api/tracks/${t.id}`, { method: 'DELETE' });
@@ -617,7 +637,8 @@ async function renderTab() {
   if (state.tab === 'calendar') await renderCalendar();
   else if (state.tab === 'catalog') await loadCatalog();
   else if (state.tab === 'logs') await renderLogs();
-  else await renderTracks();
+  else if (state.tab === 'archive') await renderTracks(true);
+  else await renderTracks(false);
 }
 
 function init() {
@@ -667,7 +688,7 @@ function init() {
     if (!b) return;
     if (b.dataset.track) {
       state.openTracks.add(Number(b.dataset.track)); store.set('openTracks', [...state.openTracks]);
-      state.tab = 'tracks'; store.set('tab', 'tracks'); await renderTab();
+      state.tab = b.dataset.archived === '1' ? 'archive' : 'tracks'; store.set('tab', state.tab); await renderTab();
       $(`details.track[data-id="${b.dataset.track}"]`)?.scrollIntoView({ block: 'start' });
       return;
     }
@@ -678,34 +699,37 @@ function init() {
     await loadCatalog(true);
   }));
 
-  const tl = $('#track-list');
-  tl.addEventListener('toggle', ev => {
-    const d = ev.target;
-    if (!d.matches?.('details.track')) return;
-    const id = Number(d.dataset.id);
-    if (d.open) { state.openTracks.add(id); loadEpisodes(id).catch(e => toast(e.message, true)); }
-    else state.openTracks.delete(id);
-    store.set('openTracks', [...state.openTracks]);
-  }, true);
-  tl.addEventListener('click', guard(async ev => {
-    const det = ev.target.closest('details.track');
-    if (!det) return;
-    const t = tl._tracks.find(x => x.id === Number(det.dataset.id));
-    const row = ev.target.closest('tr[data-ep]');
-    if (row) {
-      const box = row.closest('.eps');
-      const e = box._eps.find(x => x.id === Number(row.dataset.ep));
-      if (ev.target.classList.contains('w')) {
-        await toggleWatched(e.id, ev.target.checked);
-        await refreshTrack(t.id);
-      } else if (ev.target.dataset.act === 'ep-edit' || ev.target.tagName === 'TD') {
-        if (await editEpisode(e, t.display_title)) await refreshTrack(t.id);
+  const bindTrackRoot = tl => {
+    const archived = tl.dataset.archived === '1';
+    tl.addEventListener('toggle', ev => {
+      const d = ev.target;
+      if (!d.matches?.('details.track')) return;
+      const id = Number(d.dataset.id);
+      if (d.open) { state.openTracks.add(id); loadEpisodes(id).catch(e => toast(e.message, true)); }
+      else state.openTracks.delete(id);
+      store.set('openTracks', [...state.openTracks]);
+    }, true);
+    tl.addEventListener('click', guard(async ev => {
+      const det = ev.target.closest('details.track');
+      if (!det) return;
+      const t = tl._tracks.find(x => x.id === Number(det.dataset.id));
+      const row = ev.target.closest('tr[data-ep]');
+      if (row) {
+        const box = row.closest('.eps');
+        const e = box._eps.find(x => x.id === Number(row.dataset.ep));
+        if (ev.target.classList.contains('w')) {
+          await toggleWatched(e.id, ev.target.checked);
+          await refreshTrack(t.id);
+        } else if (ev.target.dataset.act === 'ep-edit' || ev.target.tagName === 'TD') {
+          if (await editEpisode(e, t.display_title)) await refreshTrack(t.id);
+        }
+        return;
       }
-      return;
-    }
-    const act = ev.target.closest('button[data-act]')?.dataset.act;
-    if (act && await trackAction(t, act)) await renderTracks();
-  }));
+      const act = ev.target.closest('button[data-act]')?.dataset.act;
+      if (act && await trackAction(t, act)) await renderTracks(archived);
+    }));
+  };
+  $$('.track-root').forEach(bindTrackRoot);
   $('#track-add-manual').addEventListener('click', guard(manualAdd));
 
   $('#sync-btn').addEventListener('click', guard(async () => {

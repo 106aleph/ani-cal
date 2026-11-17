@@ -95,6 +95,11 @@ def apply_track(conn, track_id: int) -> int:
     for r in stale:
         if r["id"] not in kept:
             conn.execute("DELETE FROM episodes WHERE id=?", (r["id"],))
+    # 視聴済みに移した作品に、新しい未視聴の話が増えたら登録作品へ戻す
+    if tr["archived"] and conn.execute(
+            "SELECT 1 FROM episodes WHERE track_id=? AND hidden=0 AND watched=0", (track_id,)).fetchone():
+        conn.execute("UPDATE tracks SET archived=0, archived_at=NULL WHERE id=?", (track_id,))
+        log.info("track %s returned from archive (new unwatched episodes)", track_id)
     return len(chosen)
 
 

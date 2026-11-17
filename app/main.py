@@ -215,8 +215,8 @@ def catalog():
                LEFT JOIN channel_groups g ON g.gid=c.gid
                WHERE p.deleted=0 AND (p.flag & ?)=0
                GROUP BY p.tid, p.chid""", (mask,)).fetchall()
-        tracked = {(r["tid"], r["chid"]): r["id"] for r in
-                   conn.execute("SELECT id, tid, chid FROM tracks WHERE tid IS NOT NULL")}
+        tracked = {(r["tid"], r["chid"]): (r["id"], bool(r["archived"])) for r in
+                   conn.execute("SELECT id, tid, chid, archived FROM tracks WHERE tid IS NOT NULL")}
 
     items: dict[int, dict] = {}
     for r in rows:
@@ -236,7 +236,8 @@ def catalog():
             "last_start": r["last_start"],
             "has_ep1": r["ep1_start"] is not None,
             "count": r["n"],
-            "track_id": tracked.get((r["tid"], r["chid"])),
+            "track_id": tracked.get((r["tid"], r["chid"]), (None, False))[0],
+            "track_archived": tracked.get((r["tid"], r["chid"]), (None, False))[1],
         })
 
     out = []
@@ -285,11 +286,34 @@ def title_channels(tid: int):
 
 # ---------------------------------------------------------------- 登録作品
 @app.get("/api/tracks")
-def list_tracks():
+def list_tracks(archived: bool = False):
+    """archived=false: 登録作品 / archived=true: 視聴済みに移した作品"""
+    order = "tr.archived_at DESC, tr.id DESC" if archived else "COALESCE(next_start, '9999'), tr.id DESC"
     with db.connect() as conn:
-        rows = conn.execute(TRACK_SELECT + " ORDER BY COALESCE(next_start, '9999') , tr.id DESC",
-                            {"now": config.fmt_dt(config.now_jst())}).fetchall()
+        rows = conn.execute(TRACK_SELECT + f" WHERE tr.archived=:arch ORDER BY {order}",
+                            {"now": config.fmt_dt(config.now_jst()), "arch": 1 if archived else 0}).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/tracks/{track_id}/archive")
+def archive_track(track_id: int):
+    """全話視聴済みの作品を「視聴済み」へ移す"""
+    with db.connect() as conn:
+        tr = get_track(conn, track_id)
+        if tr["ep_total"] == 0 or tr["ep_watched"] < tr["ep_total"]:
+            raise HTTPException(409, "全話を視聴済みにしてから移してください")
+        conn.execute("UPDATE tracks SET archived=1, archived_at=? WHERE id=?",
+                     (config.fmt_dt(config.now_jst()), track_id))
+        return get_track(conn, track_id)
+
+
+@app.post("/api/tracks/{track_id}/unarchive")
+def unarchive_track(track_id: int):
+    """視聴済みから登録作品へ戻す"""
+    with db.connect() as conn:
+        get_track(conn, track_id)
+        conn.execute("UPDATE tracks SET archived=0, archived_at=NULL WHERE id=?", (track_id,))
+        return get_track(conn, track_id)
 
 
 @app.post("/api/tracks", status_code=201)
@@ -511,7 +535,7 @@ JOIN tracks tr ON tr.id=e.track_id
 LEFT JOIN titles t ON t.tid=tr.tid
 LEFT JOIN channels c ON c.chid=tr.chid
 LEFT JOIN programs p ON p.pid=e.pid
-WHERE e.hidden=0 AND e.start_at IS NOT NULL
+WHERE e.hidden=0 AND e.start_at IS NOT NULL AND tr.archived=0
 """
 
 

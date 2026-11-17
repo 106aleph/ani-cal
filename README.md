@@ -30,6 +30,7 @@ sudo tailscale serve --bg 8000    # APP_PORT を変えた場合はその番号
 | カレンダー | 月／週（時間軸・現在時刻の線つき）／リスト（月ごと）。視聴チェック、クリックで編集、深夜帯の「25:30」表記切替 |
 | 新作一覧 | 媒体ごとの第1話日時つき一覧。媒体チップをクリックで登録。時期・媒体・配信系・未登録・タイトルで絞り込み |
 | 登録作品 | 話数一覧、視聴チェック、話の追加・編集・削除、媒体の変更、タイトル／媒体名の上書き、間隔指定での話の作成、一括視聴、ICS 出力 |
+| 視聴済み | 全話視聴した作品の置き場。登録作品の「視聴済みに移す」（全話視聴済みのときだけ押せる）で移動、「登録作品に戻す」で復帰。カレンダー・未視聴一覧・ICS には出ない。新しい話が追加されると自動で登録作品に戻る |
 | ログ | 取得履歴（日時・種別・範囲・結果・所要時間・件数）。最新500件 |
 
 - 編集した話は「修正済」になり、再取得で上書きされません（「取得値に戻す」可）。削除した話は再取得でも復活しません（「復元」可）。
@@ -77,10 +78,11 @@ sudo tailscale serve --https=443 off                     # serve の設定を外
 | POST | `/api/sync/cancel` | 取得の中断 |
 | GET | `/api/logs` | 取得履歴 |
 | GET | `/api/catalog` | 新作一覧 |
-| GET/POST | `/api/tracks` | 登録作品の一覧／登録 |
+| GET/POST | `/api/tracks` | 登録作品の一覧（`?archived=true` で視聴済み）／登録 |
 | PATCH/DELETE | `/api/tracks/{id}` | 作品の編集／解除 |
 | POST | `/api/tracks/{id}/generate` | 予測話の作成 |
 | POST | `/api/tracks/{id}/resync` | 取得データの再反映 |
+| POST | `/api/tracks/{id}/archive` / `unarchive` | 視聴済みへ移す／登録作品へ戻す |
 | GET/POST | `/api/tracks/{id}/episodes` | 話の一覧／追加 |
 | PATCH/DELETE | `/api/episodes/{id}` | 話の編集／削除 |
 | POST | `/api/episodes/{id}/revert` | 取得値に戻す |

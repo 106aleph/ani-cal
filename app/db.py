@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS tracks(
   platform TEXT,
   auto_sync INTEGER NOT NULL DEFAULT 1,
   note TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0,   -- 1=視聴済みに移した作品（カレンダー・未視聴一覧に出さない）
+  archived_at TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tracks_tid_chid
   ON tracks(tid, chid) WHERE tid IS NOT NULL AND chid IS NOT NULL;
@@ -115,6 +117,10 @@ def init() -> None:
         conn.executescript(SCHEMA)
         # 既存DBへの追加（所要時間の列）
         cols = {r[1] for r in conn.execute("PRAGMA table_info(sync_log)")}
+        tcols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+        if "archived" not in tcols:
+            conn.execute("ALTER TABLE tracks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE tracks ADD COLUMN archived_at TEXT")
         if "duration_sec" not in cols:
             conn.execute("ALTER TABLE sync_log ADD COLUMN duration_sec REAL")
         # 再起動などで途中終了した取得を「中断」にする

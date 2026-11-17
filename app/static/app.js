@@ -64,7 +64,7 @@ function fmtFull(s) {
 }
 
 /* ============================================================ dialog */
-function formDialog({ title, fields = [], submit = '保存', extra = [], html = '' }) {
+function formDialog({ title, fields = [], submit = '保存', extra = [], html = '', setup = null }) {
   return new Promise(resolve => {
     const dlg = document.createElement('dialog');
     const fieldHtml = fields.map(f => {
@@ -105,6 +105,7 @@ function formDialog({ title, fields = [], submit = '保存', extra = [], html = 
       resolve({ action, values });
     });
     document.body.append(dlg);
+    if (setup) setup(dlg);
     dlg.showModal();
   });
 }
@@ -163,14 +164,15 @@ function calRange() {
     const end = new Date(last); end.setDate(last.getDate() + (6 - last.getDay()) + 1);
     return { start, end };
   }
+  if (state.view === 'list') { // リストは月ごと（その月の1日〜末日）
+    const start = new Date(c.getFullYear(), c.getMonth(), 1);
+    return { start, end: new Date(c.getFullYear(), c.getMonth() + 1, 1) };
+  }
   if (state.view === 'week') {
     const start = new Date(c.getFullYear(), c.getMonth(), c.getDate() - c.getDay());
     const end = new Date(start); end.setDate(end.getDate() + 7);
     return { start, end };
   }
-  const start = new Date(c.getFullYear(), c.getMonth(), c.getDate());
-  const end = new Date(start); end.setDate(end.getDate() + 14);
-  return { start, end };
 }
 
 function evHtml(e) {
@@ -194,7 +196,8 @@ let calEvents = [];
 async function renderCalendar() {
   const { start, end } = calRange();
   const fetchEnd = new Date(end); fetchEnd.setDate(fetchEnd.getDate() + 1); // 24時以降表記で前日に寄る分
-  let evs = await api(`/api/calendar?start=${ymd(start)}&end=${ymd(fetchEnd)}`);
+  const fetchStart = new Date(start); fetchStart.setDate(fetchStart.getDate() - 1); // 24時以降表記で前日に寄る分（月初の深夜枠）
+  let evs = await api(`/api/calendar?start=${ymd(fetchStart)}&end=${ymd(fetchEnd)}`);
   if (state.hideWatched) evs = evs.filter(e => !e.watched);
   calEvents = evs;
   state.nowTick = null;
@@ -312,20 +315,27 @@ async function renderCalendar() {
       box.scrollLeft = Math.max(0, left - $('.thead .corner', box).offsetWidth);
     }
   } else {
-    $('#cal-label').textContent = `${ymd(start).slice(5).replace('-', '/')} 〜 ${ymd(new Date(end - 864e5)).slice(5).replace('-', '/')}`;
-    const backlog = state.view === 'list' ? (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start)) : [];
+    $('#cal-label').textContent = `${start.getFullYear()}年${start.getMonth() + 1}月`;
+    // 配信済みの未視聴は、今月を表示しているときだけ先頭に出す
+    const isCurMonth = ymd(start).slice(0, 7) === today.slice(0, 7);
+    const backlog = isCurMonth ? (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start)) : [];
     let h = '';
     if (backlog.length) {
       h += `<h3 class="dayhead">未視聴（配信済み） <span class="muted">${backlog.length}件</span></h3><div class="evlist">${backlog.map(e =>
         evHtml(e).replace('<span class="time">', `<span class="date">${fmtFull(e.start_at).split(' ')[0]}</span><span class="time">`)).join('')}</div>`;
       calEvents = calEvents.concat(backlog);
     }
+    // 予定のある日だけ表示（今日は予定が無くても出す）
+    let any = false;
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       const k = ymd(d);
       const list = byDay[k] || [];
-      h += `<h3 class="dayhead ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）${k === today ? ' ・今日' : ''}</h3>`;
+      if (!list.length && k !== today) continue;
+      any = any || list.length > 0;
+      h += `<h3 class="dayhead ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）${k === today ? ' ・今日' : ''}${list.length ? ` <span class="muted small">${list.length}件</span>` : ''}</h3>`;
       h += list.length ? `<div class="evlist">${list.map(evHtml).join('')}</div>` : '<p class="muted small empty">予定なし</p>';
     }
+    if (!any) h += '<p class="empty">この月の予定はありません。</p>';
     $('#cal-list').innerHTML = h;
   }
 }
@@ -545,18 +555,25 @@ async function manualAdd() {
 
 /* ============================================================ logs */
 const TRIGGER_LABEL = { auto: '定期', startup: '起動時', manual: '今すぐ', range: '期間指定' };
-const STATUS_LABEL = { ok: '成功', error: 'エラー', running: '取得中' };
+const fmtDur = s => {
+  if (s === null || s === undefined) return '—';
+  if (s < 10) return `${s.toFixed(1)}秒`;
+  const t = Math.round(s), m = Math.floor(t / 60);
+  return m ? `${m}分${pad(t % 60)}秒` : `${t}秒`;
+};
+const STATUS_LABEL = { ok: '成功', error: 'エラー', running: '取得中', cancelled: '中断' };
 async function renderLogs() {
   const logs = await api('/api/logs');
   const box = $('#log-list');
   if (!logs.length) { box.innerHTML = '<p class="empty">取得履歴はまだありません。</p>'; return; }
   const t = s => s ? s.replace('T', ' ') : '—';
-  box.innerHTML = `<table class="eptable logtable"><thead><tr><th>実行日時</th><th>種別</th><th>取得範囲</th><th>結果</th><th>番組</th><th>タイトル</th><th>詳細</th></tr></thead><tbody>
+  box.innerHTML = `<table class="eptable logtable"><thead><tr><th>実行日時</th><th>種別</th><th>取得範囲</th><th>結果</th><th>所要時間</th><th>番組</th><th>タイトル</th><th>詳細</th></tr></thead><tbody>
     ${logs.map(l => `<tr class="${l.status === 'error' ? 'logerr' : ''}">
       <td data-l="実行日時">${esc(t(l.started_at))}</td>
       <td data-l="種別">${esc(TRIGGER_LABEL[l.trigger] || l.trigger)}</td>
       <td data-l="取得範囲">${esc(l.range_start || '—')} 〜 ${esc(l.range_end || '—')}</td>
       <td data-l="結果"><span class="badge ${l.status === 'error' ? 'edited' : l.status === 'ok' ? 'src-sync' : 'src-generated'}">${esc(STATUS_LABEL[l.status] || l.status)}</span></td>
+      <td data-l="所要時間">${fmtDur(l.duration_sec)}</td>
       <td data-l="番組">${l.programs ?? '—'}</td><td data-l="タイトル">${l.titles ?? '—'}</td>
       <td class="muted small" data-l="詳細">${esc(l.message || '')}</td></tr>`).join('')}</tbody></table>`;
 }
@@ -582,6 +599,7 @@ async function refreshStatus() {
   el.title = s.last_message || '';
   $('#sync-btn').disabled = s.running;
   $('#sync-range-btn').disabled = s.running;
+  $('#sync-cancel-btn').hidden = !s.running;
   clearTimeout(pollTimer);
   if (s.running) pollTimer = setTimeout(refreshStatus, 3000);
   else if (refreshStatus._wasRunning) { state.catalog = null; renderTab(); }
@@ -610,8 +628,8 @@ function init() {
   })));
   const shift = dir => guard(async () => {
     const c = state.cursor;
-    state.cursor = state.view === 'month' ? new Date(c.getFullYear(), c.getMonth() + dir, 1)
-      : new Date(c.getFullYear(), c.getMonth(), c.getDate() + (state.view === 'week' ? 7 : 14) * dir);
+    state.cursor = state.view === 'month' || state.view === 'list' ? new Date(c.getFullYear(), c.getMonth() + dir, 1)
+      : new Date(c.getFullYear(), c.getMonth(), c.getDate() + 7 * dir);
     await renderCalendar();
   });
   $('#cal-prev').addEventListener('click', shift(-1));
@@ -693,15 +711,31 @@ function init() {
     await refreshStatus();
   }));
 
+  $('#sync-cancel-btn').addEventListener('click', guard(async () => {
+    const dlg = await confirmDialog('実行中の取得を中断しますか？（取得済みの分は保存されます）', '中断する');
+    if (!dlg) return;
+    const r = await api('/api/sync/cancel', { method: 'POST' });
+    toast(r.cancelled ? '中断を要求しました' : '実行中の取得はありません');
+    await refreshStatus();
+  }));
   $('#sync-range-btn').addEventListener('click', guard(async () => {
     const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
     const r = await formDialog({
       title: '期間を指定して取得', submit: '取得',
-      html: '<p class="muted small">指定した期間の配信予定をしょぼいカレンダーから取得します（最大400日・2日ごとに1.5秒間隔なので、長い期間は数分かかります）。放送開始が古い作品や、先の予定を一覧に出したいときに使います。</p>',
+      html: '<p class="muted small">指定した期間の配信予定をしょぼいカレンダーから取得します。開始日を選ぶと終了日が180日間の末日に、終了日を選ぶと開始日が180日間の初日に自動で入ります（あとから短く直せます）。最大180日です。2日ごとに1.5秒間隔で取得するため、長い期間は数分かかります。放送開始が古い作品や、先の予定を一覧に出したいときに使います。</p>',
       fields: [
         { name: 'start', label: '開始日', type: 'date', value: store.get('syncStart', day(-30)), required: true },
-        { name: 'end', label: '終了日', type: 'date', value: store.get('syncEnd', day(180)), required: true },
+        { name: 'end', label: '終了日', type: 'date', value: store.get('syncEnd', day(149)), required: true },
       ],
+      // 開始日を決めると終了日を最大期間（180日）の末日に、終了日を決めると開始日を180日前に自動設定する
+      setup: dlg => {
+        const st = $('#f_start', dlg), en = $('#f_end', dlg);
+        const shiftDay = (v, n) => { const [Y, M, D] = v.split('-').map(Number); return ymd(new Date(Y, M - 1, D + n)); };
+        // 前回の値が上限を超えていたら、終了日を詰める
+        if (st.value && en.value && en.value > shiftDay(st.value, 179)) en.value = shiftDay(st.value, 179);
+        st.addEventListener('change', () => { if (st.value) en.value = shiftDay(st.value, 179); });
+        en.addEventListener('change', () => { if (en.value) st.value = shiftDay(en.value, -179); });
+      },
     });
     if (r.action !== 'ok') return;
     store.set('syncStart', r.values.start); store.set('syncEnd', r.values.end);

@@ -7,11 +7,12 @@ from datetime import datetime, timedelta
 
 import config
 import db
-from syoboi import SyoboiClient
+from syoboi import SyncCancelled, SyoboiClient
 
 log = logging.getLogger("sync")
 
 _lock = threading.Lock()
+_cancel = threading.Event()  # 取得の中断要求
 STATE = {
     "running": False,
     "progress": None,
@@ -103,14 +104,14 @@ def apply_all_tracks(conn) -> None:
 
 
 # ---------------------------------------------------------------- 取得処理
-def _finish_log(log_id, status, programs, titles, message) -> None:
+def _finish_log(log_id, status, programs, titles, message, duration=None) -> None:
     if log_id is None:
         return
     try:
         with db.connect() as conn:
             conn.execute(
-                "UPDATE sync_log SET finished_at=?, status=?, programs=?, titles=?, message=? WHERE id=?",
-                (config.fmt_dt(config.now_jst()), status, programs, titles, message, log_id))
+                "UPDATE sync_log SET finished_at=?, status=?, programs=?, titles=?, message=?, duration_sec=? WHERE id=?",
+                (config.fmt_dt(config.now_jst()), status, programs, titles, message, duration, log_id))
             conn.execute("DELETE FROM sync_log WHERE id <= (SELECT MAX(id) FROM sync_log) - 500")
     except Exception:
         log.exception("failed to write sync_log")
@@ -143,10 +144,13 @@ def run_sync(start_date: datetime | None = None, end_date: datetime | None = Non
         return False
     STATE.update(running=True, progress="開始", last_started=config.fmt_dt(config.now_jst()),
                  last_error=None)
-    client = SyoboiClient()
+    _cancel.clear()
+    client = SyoboiClient(cancel=_cancel)
+    t0 = time.monotonic()
     log_id = None
     total = n_titles = 0
     ok = False
+    cancelled = False
     try:
         now = config.now_jst()
         with db.connect() as conn:
@@ -260,20 +264,35 @@ def run_sync(start_date: datetime | None = None, end_date: datetime | None = Non
         kind = {"diff": "差分", "full": "初回", "range": "期間指定"}[mode]
         STATE["last_message"] = f"{kind}: 番組 {total} 件 / 作品 {len(tids)} 件 / タイトル {n_titles} 件を取得（{label_s}〜{label_e}）"
         log.info(STATE["last_message"])
-        _finish_log(log_id, "ok", total, n_titles, STATE["last_message"])
+        _finish_log(log_id, "ok", total, n_titles, STATE["last_message"], time.monotonic() - t0)
         ok = True
+    except SyncCancelled:
+        cancelled = True
+        STATE["last_message"] = f"中断しました（取得済みの {total} 件は保存済み）"
+        log.info(STATE["last_message"])
+        _finish_log(log_id, "cancelled", total, n_titles, STATE["last_message"], time.monotonic() - t0)
     except Exception as e:
         log.exception("sync failed")
         STATE["last_error"] = str(e)
-        _finish_log(log_id, "error", total, n_titles, str(e))
+        _finish_log(log_id, "error", total, n_titles, str(e), time.monotonic() - t0)
     finally:
         client.close()
         try:
-            _record_result(ok, trigger)
+            if not cancelled:  # 中断は失敗として数えない
+                _record_result(ok, trigger)
         except Exception:
             log.exception("failed to record result")
         STATE.update(running=False, progress=None, last_finished=config.fmt_dt(config.now_jst()))
         _lock.release()
+    return True
+
+
+def cancel() -> bool:
+    """実行中の取得に中断を要求する。実行中でなければ False"""
+    if not _lock.locked():
+        return False
+    _cancel.set()
+    STATE["progress"] = "中断しています…"
     return True
 
 

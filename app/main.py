@@ -164,7 +164,7 @@ class SyncIn(BaseModel):
     end: str | None = None    # YYYY-MM-DD（この日を含む）
 
 
-MAX_SYNC_DAYS = 400
+MAX_SYNC_DAYS = 180  # 一度に取得できる期間の上限（自主的な制限。しょぼいカレンダーの規定値ではない）
 
 
 @app.post("/api/sync", status_code=202)
@@ -188,6 +188,11 @@ def sync_logs(limit: int = Query(200, ge=1, le=500)):
     with db.connect() as conn:
         return [dict(r) for r in conn.execute(
             "SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+@app.post("/api/sync/cancel")
+def cancel_sync():
+    return {"cancelled": sync.cancel()}
 
 
 # ---------------------------------------------------------------- 新作一覧

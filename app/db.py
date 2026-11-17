@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS sync_log(
   status TEXT NOT NULL DEFAULT 'running',
   programs INTEGER,
   titles INTEGER,
-  message TEXT
+  message TEXT,
+  duration_sec REAL
 );
 """
 
@@ -112,6 +113,10 @@ def init() -> None:
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        # 既存DBへの追加（所要時間の列）
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(sync_log)")}
+        if "duration_sec" not in cols:
+            conn.execute("ALTER TABLE sync_log ADD COLUMN duration_sec REAL")
         # 再起動などで途中終了した取得を「中断」にする
         conn.execute("UPDATE sync_log SET status='error', message='中断されました' WHERE status='running'")
         conn.commit()

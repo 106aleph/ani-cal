@@ -8,6 +8,7 @@
 """
 import logging
 import random
+import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
@@ -21,6 +22,10 @@ log = logging.getLogger("syoboi")
 
 class SyoboiError(RuntimeError):
     pass
+
+
+class SyncCancelled(BaseException):  # except Exception で握りつぶされないよう BaseException 系にする
+    """ユーザー操作による取得の中断"""
 
 
 def _items(root: ET.Element, tag: str) -> list[dict]:
@@ -46,7 +51,8 @@ def _dt(v: str):
 
 
 class SyoboiClient:
-    def __init__(self, base: str = None, interval: float = None):
+    def __init__(self, base: str = None, interval: float = None, cancel: threading.Event | None = None):
+        self.cancel = cancel or threading.Event()
         self.base = base or config.SYOBOI_BASE
         self.interval = config.SYOBOI_INTERVAL_SEC if interval is None else interval
         self._last = 0.0
@@ -58,12 +64,19 @@ class SyoboiClient:
     def close(self):
         self.http.close()
 
+    def _sleep(self, sec: float) -> None:
+        """待機。中断要求があれば即座に SyncCancelled"""
+        if self.cancel.wait(max(0.0, sec)):
+            raise SyncCancelled()
+
     def _get(self, params: dict) -> ET.Element:
         last_exc = None
         for attempt in range(5):
+            if self.cancel.is_set():
+                raise SyncCancelled()
             wait = self._last + self.interval - time.monotonic()
             if wait > 0:
-                time.sleep(wait)
+                self._sleep(wait)
             backoff = 5 * 2 ** attempt  # 5,10,20,40,80秒
             try:
                 r = self.http.get(self.base, params=params)
@@ -91,7 +104,7 @@ class SyoboiClient:
                 backoff *= random.uniform(1.0, 1.3)  # 再試行の集中を避ける
                 log.warning("syoboi request failed (%s), retry in %.0fs", e, backoff)
                 if attempt < 4:
-                    time.sleep(backoff)
+                    self._sleep(backoff)
         raise SyoboiError(f"request failed: {last_exc}")
 
     # ---- API ----

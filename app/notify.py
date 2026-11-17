@@ -42,8 +42,11 @@ def _vapid() -> Vapid02:
     with _lock, db.connect() as conn:
         pem = db.get_meta(conn, "vapid_private")
         if pem:
-            return Vapid02.from_pem(pem.encode())
+            v = Vapid02.from_pem(pem.encode())
+            v.conf["no-strict"] = True  # sub に https://host/path 形式のURLを許可（既定の検査は path を拒否する）
+            return v
         v = Vapid02()
+        v.conf["no-strict"] = True
         v.generate_keys()
         db.set_meta(conn, "vapid_private",
                     v.private_pem().decode())
@@ -156,8 +159,10 @@ def test(body: EndpointIn):
         if _gone(e):
             _drop(body.endpoint)
             raise HTTPException(410, "通知の購読が無効になりました。通知を有効にし直してください")
+        log.warning("push test failed (%s): %s", urlparse(body.endpoint).hostname, e)
         raise HTTPException(502, f"通知サービスへの送信に失敗しました: {e}")
     except Exception as e:  # ネットワーク不通など
+        log.warning("push test failed (%s): %r", urlparse(body.endpoint).hostname, e)
         raise HTTPException(502, f"通知サービスへの送信に失敗しました: {e}")
     return {"ok": True}
 

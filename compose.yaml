@@ -1,0 +1,20 @@
+name: anime-calendar
+
+# Tailscale はホスト（VM）側で動かし、
+#   sudo tailscale serve --bg ${APP_PORT:-8000}
+# で https://<VMのホスト名>.<tailnet>.ts.net/ → 127.0.0.1:8000 に転送する。
+# ポートは 127.0.0.1 にのみ公開するので LAN からは直接アクセスできない。
+
+services:
+  app:
+    build: ./app
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_PATH: /data/anime.db
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

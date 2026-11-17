@@ -184,6 +184,12 @@ function evHtml(e) {
 const narrowMq = window.matchMedia('(max-width: 720px)');
 const isNarrow = () => narrowMq.matches;
 
+/* 要素の上端から画面の下端までの高さ（下余白つき）。ページがスクロール済みでも文書上の位置で計算する */
+function availHeight(el, reserve = 0) {
+  const top = el.getBoundingClientRect().top + window.scrollY;
+  return Math.max(0, Math.floor(window.innerHeight - top - 56 - reserve));
+}
+
 let calEvents = [];
 async function renderCalendar() {
   const { start, end } = calRange();
@@ -197,27 +203,43 @@ async function renderCalendar() {
   const today = ymd(new Date());
 
   $('#cal-month').hidden = state.view !== 'month';
-  // 狭い画面（スマホ）では、週ビューは日ごとの縦リスト（アジェンダ）で表示する
-  const weekGrid = state.view === 'week' && !isNarrow();
+  const weekGrid = state.view === 'week';
+  const narrow = isNarrow();
   $('#cal-week').hidden = !weekGrid;
-  $('#cal-list').hidden = !(state.view === 'list' || (state.view === 'week' && isNarrow()));
+  $('#cal-list').hidden = state.view !== 'list';
+  $('#cal-day').hidden = !(state.view === 'month' && narrow);
   $$('.seg [data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
 
   if (state.view === 'month') {
     const c = state.cursor;
     $('#cal-label').textContent = `${c.getFullYear()}年${c.getMonth() + 1}月`;
+    // スマホ: 選択中の日（既定は今日）の予定を、月グリッドの下に詳しく出す
+    const inMonth = k => k.slice(0, 7) === ymd(new Date(c.getFullYear(), c.getMonth(), 1)).slice(0, 7);
+    let sel = state.selDay && inMonth(state.selDay) ? state.selDay : (inMonth(today) ? today : ymd(new Date(c.getFullYear(), c.getMonth(), 1)));
+    state.selDay = sel;
+    const MAXCHIPS = 3;
     let h = '<div class="month">' + WD.map((w, i) => `<div class="wd wd${i}">${w}</div>`).join('');
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       const k = ymd(d);
       const out = d.getMonth() !== c.getMonth();
-      h += `<div class="day ${out ? 'out' : ''} ${k === today ? 'today' : ''} wd${d.getDay()}" data-date="${k}">
-        <div class="dn">${d.getDate()}</div>${(byDay[k] || []).map(evHtml).join('')}</div>`;
+      const list = byDay[k] || [];
+      const shown = narrow ? list.slice(0, MAXCHIPS) : list;
+      h += `<div class="day ${out ? 'out' : ''} ${k === today ? 'today' : ''} ${narrow && k === sel ? 'sel' : ''} wd${d.getDay()}" data-date="${k}">
+        <div class="dn">${d.getDate()}</div>${shown.map(evHtml).join('')}${narrow && list.length > MAXCHIPS ? `<div class="more">+${list.length - MAXCHIPS}</div>` : ''}</div>`;
+    }
+    if (narrow) {
+      const [Y, M, D] = sel.split('-').map(Number), sd = new Date(Y, M - 1, D), list = byDay[sel] || [];
+      $('#cal-day').innerHTML = `<h3 class="dayhead ${sel === today ? 'today' : ''}">${sd.getMonth() + 1}/${sd.getDate()}（${WD[sd.getDay()]}）${sel === today ? ' ・今日' : ''} <span class="muted small">${list.length}件</span></h3>`
+        + (list.length ? `<div class="evlist">${list.map(evHtml).join('')}</div>` : '<p class="muted small empty">予定なし</p>');
     }
     $('#cal-month').innerHTML = h + '</div>';
+    // 広い画面では、月グリッドを画面の下端まで伸ばす（縦向きモニターで下が空かないように）
+    if (!narrow) $('#cal-month .month').style.minHeight = availHeight($('#cal-month')) + 'px';
   } else if (weekGrid) {
     const last = new Date(end - 864e5);
     $('#cal-label').textContent = `${start.getFullYear()}/${start.getMonth() + 1}/${start.getDate()} 〜 ${last.getMonth() + 1}/${last.getDate()}`;
-    const PX = 1.6, DUR = 30; // 1分あたりpx / 1話の表示長(分)
+    const DUR = 30; // 1話の表示長(分)
+    let PX = narrow ? 2.4 : 1.6; // 1分あたりpx（スマホは文字が読めるよう高く。広い画面は下で画面の高さに合わせる）
     const mins = e => { const [h, m] = disp(e.start_at).time.split(':').map(Number); return h * 60 + m; };
     const wk = [];
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) wk.push(new Date(d));
@@ -231,6 +253,9 @@ async function renderCalendar() {
     }
     if (!hrs.size) for (let hh = 19; hh <= 25; hh++) if (hh >= lo && hh <= hi) hrs.add(hh);
     const rows = [...hrs].sort((x, y) => x - y), rowOf = new Map(rows.map((hh, i) => [hh, i]));
+    if (!narrow) { // 画面の高さに合わせて時間軸を伸縮（最小は従来の高さ）。見出し行ぶんを引く
+      PX = Math.min(4.2, Math.max(1.6, availHeight($('#cal-week'), 34) / (rows.length * 60)));
+    }
     const H = rows.length * 60 * PX;
     const yOf = m => (rowOf.get(Math.floor(m / 60)) * 60 + m % 60) * PX;
     const axis = rows.map((hh, i) => `<div class="hl ${i && rows[i - 1] !== hh - 1 ? 'gap' : ''}" style="top:${i * 60 * PX}px">${pad(hh)}:00</div>`).join('');
@@ -251,12 +276,17 @@ async function renderCalendar() {
       if (cluster.length) flush();
       cols += `<div class="dcol ${k === today ? 'today' : ''}" style="height:${H}px">` + items.map(it => {
         const top = yOf(it.s), w = 100 / it.n;
-        return evHtml(it.e).replace('class="ev ', 'class="ev blk ')
+        return evHtml(it.e).replace('class="ev ', `class="ev blk ${it.n >= 3 ? 'tight' : ''} `)
           .replace('data-id', `style="top:${top}px;height:${DUR * PX - 2}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 2px);--h:${hue(it.e.track_id)}" data-id`)
           .replace(/style="--h:[^"]*" (style=)/, '$1');
       }).join('') + '</div>';
     }
-    $('#cal-week').innerHTML = `<div class="tgrid"><div class="thead">${head}</div><div class="tbody">${cols}</div></div>`;
+    $('#cal-week').innerHTML = `<div class="tgrid" style="--hour:${60 * PX}px"><div class="thead">${head}</div><div class="tbody">${cols}</div></div>`;
+    if (narrow) { // 今日（無ければ週の頭）の列が見える位置までスクロール
+      const box = $('#cal-week'), col = $('.thead .wd.today', box) || $('.thead .wd', box);
+      const left = col.getBoundingClientRect().left - box.getBoundingClientRect().left + box.scrollLeft;
+      box.scrollLeft = Math.max(0, left - $('.thead .corner', box).offsetWidth);
+    }
   } else {
     $('#cal-label').textContent = `${ymd(start).slice(5).replace('-', '/')} 〜 ${ymd(new Date(end - 864e5)).slice(5).replace('-', '/')}`;
     const backlog = state.view === 'list' ? (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start)) : [];
@@ -566,15 +596,19 @@ function init() {
   $('#opt-late').addEventListener('change', guard(async e => { state.late = e.target.checked; store.set('late', state.late); await renderTab(); }));
   $('#opt-hide-watched').addEventListener('change', guard(async e => { state.hideWatched = e.target.checked; store.set('hideWatched', state.hideWatched); await renderCalendar(); }));
   bindEventClicks($('#cal-month'), renderCalendar);
-  // スマホの月表示は予定が小さな帯なので、日付をタップするとその週の一覧に移る
+  // スマホの月表示: 日付をタップすると、その日の予定を下に表示する
   $('#cal-month').addEventListener('click', guard(async ev => {
     const day = ev.target.closest('.day');
     if (!isNarrow() || !day?.dataset.date) return;
-    const [Y, M, D] = day.dataset.date.split('-').map(Number);
-    state.cursor = new Date(Y, M - 1, D); state.view = 'week'; store.set('view', 'week');
+    state.selDay = day.dataset.date;
     await renderCalendar();
-    window.scrollTo({ top: 0 });
   }));
+  bindEventClicks($('#cal-day'), renderCalendar);
+  let rt;
+  window.addEventListener('resize', () => { // 画面の回転・リサイズで、高さに合わせて描き直す
+    clearTimeout(rt);
+    rt = setTimeout(() => { if (state.tab === 'calendar') renderCalendar().catch(() => { }); }, 250);
+  });
   narrowMq.addEventListener('change', () => { if (state.tab === 'calendar') renderCalendar().catch(e => toast(e.message, true)); });
   bindEventClicks($('#cal-week'), renderCalendar);
   bindEventClicks($('#cal-list'), renderCalendar);

@@ -82,7 +82,7 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 .nav-month strong { margin-left: 10px; font-size: 17px; min-width: 7em; font-variant-numeric: tabular-nums; }
 
 /* month */
-.month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--line); gap: 1px;
+.month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: auto; grid-auto-rows: minmax(100px, 1fr); background: var(--line); gap: 1px;
   border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .month .wd { background: var(--panel-2); text-align: center; font-size: 12px; padding: 6px 4px; font-weight: 600; color: var(--muted); }
 .wd0 .dn, .month .wd.wd0 { color: var(--sun); }
@@ -107,7 +107,7 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 
 /* week view (time grid) */
 #cal-week { overflow-x: auto; }
-.tgrid { min-width: 720px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+.tgrid { min-width: 720px; border: 1px solid var(--line); border-radius: var(--radius); overflow: clip; background: var(--panel); }
 .thead, .tbody { display: grid; grid-template-columns: 3.8em repeat(7, minmax(0, 1fr)); }
 .thead { border-bottom: 1px solid var(--line-strong); background: var(--panel-2); }
 .thead .wd { text-align: center; font-size: 12.5px; font-weight: 600; padding: 6px 4px; border-left: 1px solid var(--line); color: var(--muted); }
@@ -121,13 +121,17 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 .axis .hl.gap { color: var(--accent); }
 .axis .hl.gap::before { content: '⋮'; position: absolute; right: 14px; top: -1.6em; }
 .dcol { position: relative; border-left: 1px solid var(--line);
-  background-image: repeating-linear-gradient(to bottom, var(--line) 0, var(--line) 1px, transparent 1px, transparent 96px); }
+  background-image: repeating-linear-gradient(to bottom, var(--line) 0, var(--line) 1px, transparent 1px, transparent var(--hour, 96px)); }
 .dcol .ev.blk { position: absolute; margin: 0; flex-wrap: wrap; align-content: flex-start; overflow: hidden; white-space: normal;
   line-height: 1.25; font-size: 11.5px; padding: 3px 4px; gap: 2px 4px; box-shadow: 0 1px 0 rgba(0, 0, 0, .35); }
 .dcol .ev.blk .t { flex: 1 1 100%; order: 3; white-space: normal; }
 .dcol .ev.blk .ep { order: 2; }
 .dcol .ev.blk .time { order: 1; }
 .dcol .ev.blk .w { order: 0; }
+
+/* 3件以上重なる時間帯は作品名を優先 */
+.dcol .ev.blk.tight .w, .dcol .ev.blk.tight .time, .dcol .ev.blk.tight .ep { display: none; }
+.dcol .ev.blk.tight { padding: 2px 3px; font-size: 11px; }
 
 /* list view */
 .dayhead { font-size: 14px; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); }
@@ -228,12 +232,24 @@ input[type=date], input[type=datetime-local] { color-scheme: dark; }
   .opts { flex-direction: column; align-items: flex-start; gap: 6px; }
   .toolbar select, .toolbar input[type=search] { flex: 1 1 100%; width: 100%; }
 
-  /* 月表示: 予定は小さな色帯（タップで週の一覧へ） */
-  .day { min-height: 66px; padding: 3px 2px; cursor: pointer; }
-  .month .ev { pointer-events: none; height: 6px; padding: 0; margin: 2px 2px; border-left-width: 0; background: hsl(var(--h) 65% 58%); font-size: 0; overflow: hidden; }
-  .month .ev > * { display: none; }
-  .month .ev.done { opacity: .3; }
+  /* 月表示: 日付欄に作品名を短く出す。タップした日の詳細は下に表示 */
+  .month { grid-auto-rows: auto; }
+  .day { min-height: 92px; padding: 3px 2px; cursor: pointer; }
+  .day.sel { box-shadow: inset 0 0 0 2px var(--accent); }
+  .month .ev { pointer-events: none; padding: 0 3px; margin: 2px 0; border-left-width: 2px; font-size: 10px; line-height: 1.55; border-radius: 3px; }
+  .month .ev .w, .month .ev .time, .month .ev .ep { display: none; }
+  .month .ev .t { flex: 1; }
+  .month .ev.done { opacity: .35; }
+  .more { font-size: 10px; color: var(--muted); text-align: center; line-height: 1.4; }
   .dn { font-size: 12px; text-align: center; }
+  #cal-day { margin-top: 6px; }
+
+  /* 週表示: 横にスクロールできる時間軸。3日分ほどが見える幅 */
+  .tgrid { min-width: calc(3.2em + 7 * 112px); }
+  .thead, .tbody { grid-template-columns: 3.2em repeat(7, 112px); }
+  .thead .corner, .axis { position: sticky; left: 0; z-index: 3; background: var(--panel-2); }
+  .axis { background: var(--panel); border-right: 1px solid var(--line-strong); }
+  .dcol .ev.blk { font-size: 12px; line-height: 1.3; padding: 4px 5px; }
 
   /* 一覧（週・リスト）: タップしやすく */
   .evlist .ev { padding: 10px 12px; font-size: 15px; gap: 8px; }

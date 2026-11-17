@@ -77,6 +77,13 @@ main { padding: 12px 16px 40px; max-width: 1400px; margin: 0 auto; }
 .ev.done { opacity: .5; }
 .ev.done .t { text-decoration: line-through; }
 
+/* week view */
+.month.week .wd.today { background: var(--today); }
+.month.week .day { min-height: 360px; }
+.month.week .ev { flex-wrap: wrap; white-space: normal; }
+.month.week .ev .t { white-space: normal; flex: 1 1 60%; }
+.month.week .empty { padding: 8px 0; text-align: center; }
+
 /* list view */
 .dayhead { font-size: 14px; margin: 14px 0 4px; padding-bottom: 2px; border-bottom: 1px solid var(--line); }
 .dayhead.today { color: var(--accent); }
@@ -140,7 +147,8 @@ dialog menu { display: flex; gap: 6px; padding: 0; margin: 14px 0 0; align-items
 @media (max-width: 720px) {
   main { padding: 8px; }
   .day { min-height: 70px; }
-  .month .ev .time, .month .ev .w { display: none; }
+  .month:not(.week) .ev .time, .month:not(.week) .ev .w { display: none; }
+  .month.week .day { min-height: 200px; }
   .month .ev { font-size: 10px; padding: 1px 2px; }
   .sync { margin-left: 0; width: 100%; }
   .eptable th:nth-child(4), .eptable td:nth-child(4) { display: none; }

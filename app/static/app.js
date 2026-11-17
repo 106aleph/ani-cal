@@ -163,6 +163,11 @@ function calRange() {
     const end = new Date(last); end.setDate(last.getDate() + (6 - last.getDay()) + 1);
     return { start, end };
   }
+  if (state.view === 'week') {
+    const start = new Date(c.getFullYear(), c.getMonth(), c.getDate() - c.getDay());
+    const end = new Date(start); end.setDate(end.getDate() + 7);
+    return { start, end };
+  }
   const start = new Date(c.getFullYear(), c.getMonth(), c.getDate());
   const end = new Date(start); end.setDate(end.getDate() + 14);
   return { start, end };
@@ -189,6 +194,7 @@ async function renderCalendar() {
   const today = ymd(new Date());
 
   $('#cal-month').hidden = state.view !== 'month';
+  $('#cal-week').hidden = state.view !== 'week';
   $('#cal-list').hidden = state.view !== 'list';
   $$('.seg [data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
 
@@ -203,6 +209,19 @@ async function renderCalendar() {
         <div class="dn">${d.getDate()}</div>${(byDay[k] || []).map(evHtml).join('')}</div>`;
     }
     $('#cal-month').innerHTML = h + '</div>';
+  } else if (state.view === 'week') {
+    const last = new Date(end - 864e5);
+    $('#cal-label').textContent = `${start.getFullYear()}/${start.getMonth() + 1}/${start.getDate()} 〜 ${last.getMonth() + 1}/${last.getDate()}`;
+    let h = '<div class="month week">';
+    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+      const k = ymd(d);
+      h += `<div class="wd wd${d.getDay()} ${k === today ? 'today' : ''}">${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</div>`;
+    }
+    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+      const k = ymd(d);
+      h += `<div class="day ${k === today ? 'today' : ''} wd${d.getDay()}">${(byDay[k] || []).map(evHtml).join('') || '<p class="muted small empty">なし</p>'}</div>`;
+    }
+    $('#cal-week').innerHTML = h + '</div>';
   } else {
     $('#cal-label').textContent = `${ymd(start).slice(5).replace('-', '/')} 〜 ${ymd(new Date(end - 864e5)).slice(5).replace('-', '/')}`;
     const backlog = (await api('/api/backlog')).filter(e => disp(e.start_at).key < ymd(start));
@@ -467,7 +486,7 @@ function init() {
   const shift = dir => guard(async () => {
     const c = state.cursor;
     state.cursor = state.view === 'month' ? new Date(c.getFullYear(), c.getMonth() + dir, 1)
-      : new Date(c.getFullYear(), c.getMonth(), c.getDate() + 14 * dir);
+      : new Date(c.getFullYear(), c.getMonth(), c.getDate() + (state.view === 'week' ? 7 : 14) * dir);
     await renderCalendar();
   });
   $('#cal-prev').addEventListener('click', shift(-1));
@@ -476,6 +495,7 @@ function init() {
   $('#opt-late').addEventListener('change', guard(async e => { state.late = e.target.checked; store.set('late', state.late); await renderTab(); }));
   $('#opt-hide-watched').addEventListener('change', guard(async e => { state.hideWatched = e.target.checked; store.set('hideWatched', state.hideWatched); await renderCalendar(); }));
   bindEventClicks($('#cal-month'), renderCalendar);
+  bindEventClicks($('#cal-week'), renderCalendar);
   bindEventClicks($('#cal-list'), renderCalendar);
 
   ['#cat-season', '#cat-platform', '#cat-net', '#cat-untracked'].forEach(s => $(s).addEventListener('change', renderCatalog));

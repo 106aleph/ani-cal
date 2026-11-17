@@ -646,11 +646,23 @@ const fmtDur = s => {
 const STATUS_LABEL = { ok: '成功', error: 'エラー', running: '取得中', cancelled: '中断' };
 async function renderLogs() {
   const [logs, cover] = await Promise.all([api('/api/logs'), api('/api/coverage')]);
-  $('#log-coverage').innerHTML = `<strong>取得済みの期間</strong>
-    <span class="muted small">（初回・期間指定で取得した日付範囲。定期の差分取得は含みません）</span>
-    <div class="rngs">${cover.length ? cover.slice().reverse().map(r =>
-      `<span class="rng">${esc(r.start)} 〜 ${esc(r.end)} <span class="muted">${r.days}日</span></span>`).join('')
-      : '<span class="muted small">まだありません</span>'}</div>`;
+  // 取得済みの期間を新しい順の一覧にし、間の「未取得」も示す（何を取り直せばよいか分かるように）
+  const dayMs = 864e5, toD = s => new Date(s + 'T00:00:00'), plus = (s, n) => ymd(new Date(toD(s).getTime() + n * dayMs));
+  const rows = [];
+  cover.forEach((r, i) => {
+    if (i > 0) {
+      const gs = plus(cover[i - 1].end, 1), ge = plus(r.start, -1);
+      rows.push({ gap: true, start: gs, end: ge, days: Math.round((toD(ge) - toD(gs)) / dayMs) + 1 });
+    }
+    rows.push(r);
+  });
+  $('#log-coverage').innerHTML = `<div class="cov-head"><strong>取得済みの期間</strong>
+    <span class="muted small">初回・期間指定の合計（定期の差分取得は含みません）</span></div>
+    <div class="cov-list">${rows.length ? rows.reverse().map(r => `<div class="cov-row ${r.gap ? 'gap' : 'ok'}">
+      <span class="cov-kind">${r.gap ? '未取得' : '取得済み'}</span>
+      <span class="cov-range">${esc(r.start)} 〜 ${esc(r.end)}</span>
+      <span class="cov-days">${r.days}日</span></div>`).join('')
+      : '<div class="cov-row"><span class="muted">まだありません</span></div>'}</div>`;
   const box = $('#log-list');
   if (!logs.length) { box.innerHTML = '<p class="empty">取得履歴はまだありません。</p>'; return; }
   const t = s => s ? s.replace('T', ' ') : '—';

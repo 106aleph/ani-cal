@@ -195,9 +195,16 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 
 /* log */
 .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
-.coverage { margin: 0 0 14px; }
-.coverage .rngs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.rng { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.coverage { margin: 0 0 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: clip; }
+.cov-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.cov-row { display: grid; grid-template-columns: 4.5em 1fr auto; align-items: center; gap: 12px; padding: 8px 14px;
+  border-top: 1px solid var(--line); border-left: 3px solid transparent; font-variant-numeric: tabular-nums; }
+.cov-head + .cov-list .cov-row:first-child { border-top: 0; }
+.cov-row.ok { border-left-color: var(--ok); }
+.cov-row.ok .cov-kind { color: var(--ok); }
+.cov-row.gap { color: var(--muted); background: var(--out); }
+.cov-kind { font-size: 12px; font-weight: 600; }
+.cov-days { color: var(--muted); font-size: 13px; text-align: right; }
 .logtable td { cursor: default; white-space: nowrap; }
 .logtable td:last-child { white-space: normal; }
 .logtable tr.logerr td:last-child { color: var(--danger); }

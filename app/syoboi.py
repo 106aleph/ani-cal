@@ -59,13 +59,21 @@ class SyoboiClient:
 
     def _get(self, params: dict) -> ET.Element:
         last_exc = None
-        for attempt in range(4):
+        for attempt in range(6):
             wait = self._last + self.interval - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
+            backoff = 5 * (attempt + 1)
             try:
                 r = self.http.get(self.base, params=params)
                 self._last = time.monotonic()
+                if r.status_code in (429, 503):
+                    # 制限中: Retry-After があればそれに従い、無ければ長めに待つ。以降の取得間隔も広げる
+                    ra = r.headers.get("Retry-After", "")
+                    backoff = min(int(ra), 300) if ra.isdigit() else 30 * (attempt + 1)
+                    self.interval = min(max(self.interval * 2, 3.0), 15.0)
+                    log.warning("syoboi rate limited (%s), wait %ss, interval -> %.1fs",
+                                r.status_code, backoff, self.interval)
                 r.raise_for_status()
                 root = ET.fromstring(r.content)
                 code = root.findtext("Result/Code")
@@ -76,7 +84,6 @@ class SyoboiClient:
             except (httpx.HTTPError, ET.ParseError) as e:
                 self._last = time.monotonic()
                 last_exc = e
-                backoff = 5 * (attempt + 1)
                 log.warning("syoboi request failed (%s), retry in %ss", e, backoff)
                 time.sleep(backoff)
         raise SyoboiError(f"request failed: {last_exc}")

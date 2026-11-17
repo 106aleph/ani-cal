@@ -332,6 +332,21 @@ function renderCatalog() {
 }
 
 /* ============================================================ tracks */
+const trackMeta = t => `${t.ep_watched}/${t.ep_total} 視聴
+          ${t.backlog ? `<span class="badge backlog">未視聴 ${t.backlog}</span>` : ''}
+          <span class="muted small">次回 ${esc(fmtFull(t.next_start))}</span>`;
+
+/* 一覧全体を作り直さず、指定作品の件数表示とエピソード表だけ更新する（開閉状態・スクロールを保つ） */
+async function refreshTrack(id) {
+  const tl = $('#track-list');
+  const tracks = await api('/api/tracks');
+  tl._tracks = tracks;
+  const t = tracks.find(x => x.id === id);
+  const meta = $(`details.track[data-id="${id}"] summary .meta`);
+  if (t && meta) meta.innerHTML = trackMeta(t);
+  await loadEpisodes(id);
+}
+
 async function renderTracks() {
   const tracks = await api('/api/tracks');
   const root = $('#track-list');
@@ -347,9 +362,7 @@ async function renderTracks() {
           <span class="badge plat">${esc(t.display_platform || '媒体未設定')}</span>
           ${t.tid ? '' : '<span class="badge src-manual">手動登録</span>'}
           ${t.auto_sync || !t.tid ? '' : '<span class="badge hidden">自動取得OFF</span>'}</span>
-        <span class="meta">${t.ep_watched}/${t.ep_total} 視聴
-          ${t.backlog ? `<span class="badge backlog">未視聴 ${t.backlog}</span>` : ''}
-          <span class="muted small">次回 ${esc(fmtFull(t.next_start))}</span></span>
+        <span class="meta">${trackMeta(t)}</span>
       </summary>
       <div class="track-body">
         <div class="actions">
@@ -585,9 +598,9 @@ function init() {
       const e = box._eps.find(x => x.id === Number(row.dataset.ep));
       if (ev.target.classList.contains('w')) {
         await toggleWatched(e.id, ev.target.checked);
-        await renderTracks();
+        await refreshTrack(t.id);
       } else if (ev.target.dataset.act === 'ep-edit' || ev.target.tagName === 'TD') {
-        if (await editEpisode(e, t.display_title)) await renderTracks();
+        if (await editEpisode(e, t.display_title)) await refreshTrack(t.id);
       }
       return;
     }

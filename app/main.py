@@ -207,11 +207,9 @@ def cancel_sync():
 
 # ---------------------------------------------------------------- 新作一覧
 @app.get("/api/catalog")
-def catalog(all: bool = False):
-    """新作一覧。all=true なら放送開始月の範囲で絞らず、取得済みの過去のクールも含める"""
+def catalog():
+    """新作一覧。取得済みのアニメ作品を、放送開始のクール（季節）つきで返す（絞り込みは画面側）"""
     now = config.now_jst()
-    idx_now = now.year * 12 + now.month - 1
-    lo, hi = idx_now - config.NEW_MONTHS_BACK, idx_now + config.NEW_MONTHS_FORWARD
     mask = 8 if config.SKIP_REBROADCAST else 0
     with db.connect() as conn:
         rows = conn.execute(
@@ -257,11 +255,6 @@ def catalog(all: bool = False):
         y, m = it["first_year"], it["first_month"]
         if not (y and m):
             y, m = int(earliest[:4]), int(earliest[5:7])
-        idx = y * 12 + m - 1
-        # 放送開始が範囲内、または「まだ放送中」（今以降の予定がある）なら、開始が古い分割・長期クールも載せる
-        airing = max(c["last_start"] for c in it["channels"]) >= config.fmt_dt(now)
-        if not all and not (lo <= idx <= hi or (airing and idx_now - config.NEW_MONTHS_BACK_AIRING <= idx <= hi)):
-            continue
         it["season"] = season_of(y, m)
         it["season_key"] = y * 10 + (m - 1) // 3
         it["first_start"] = earliest

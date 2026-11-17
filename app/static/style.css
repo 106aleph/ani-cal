@@ -179,6 +179,9 @@ main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 .chip .when { opacity: .8; }
 
 /* tracks */
+.seasonhead { display: flex; align-items: baseline; gap: 10px; margin: 22px 0 8px; padding-bottom: 5px; font-size: 15px;
+  color: var(--accent); border-bottom: 1px solid var(--line-strong); }
+.seasonhead:first-child { margin-top: 4px; }
 .track { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; box-shadow: var(--edge); }
 .track[open] { border-color: var(--line-strong); }
 .track summary { display: flex; gap: 12px; align-items: center; padding: 10px 14px; cursor: pointer; list-style: none; flex-wrap: wrap; }

@@ -66,7 +66,8 @@ def is_net_group(gid, gname) -> bool:
 TRACK_SELECT = """
 SELECT tr.*,
   COALESCE(NULLIF(tr.title,''), t.title, '(無題)') AS display_title,
-  t.title AS orig_title,
+  t.title AS orig_title, t.first_year AS first_year, t.first_month AS first_month,
+  (SELECT MIN(start_at) FROM episodes e WHERE e.track_id=tr.id AND e.hidden=0 AND e.start_at IS NOT NULL) AS first_ep_start,
   COALESCE(NULLIF(tr.platform,''), c.name, '') AS display_platform,
   c.name AS orig_platform,
   (SELECT COUNT(*) FROM episodes e WHERE e.track_id=tr.id AND e.hidden=0) AS ep_total,
@@ -80,12 +81,22 @@ LEFT JOIN channels c ON c.chid=tr.chid
 """
 
 
+def with_season(d: dict) -> dict:
+    """放送クール（作品の放送開始年月。無ければ最初の話の月）を付ける"""
+    y, m = d.get("first_year"), d.get("first_month")
+    if not (y and m) and d.get("first_ep_start"):
+        y, m = int(d["first_ep_start"][:4]), int(d["first_ep_start"][5:7])
+    d["season"] = season_of(y, m) if y and m else None
+    d["season_key"] = y * 10 + (m - 1) // 3 if y and m else None
+    return d
+
+
 def get_track(conn, track_id: int) -> dict:
     row = conn.execute(TRACK_SELECT + " WHERE tr.id=:id",
                        {"now": config.fmt_dt(config.now_jst()), "id": track_id}).fetchone()
     if not row:
         raise HTTPException(404, "作品が見つかりません")
-    return dict(row)
+    return with_season(dict(row))
 
 
 def get_episode(conn, ep_id: int):
@@ -306,7 +317,7 @@ def list_tracks(archived: bool = False):
     with db.connect() as conn:
         rows = conn.execute(TRACK_SELECT + f" WHERE tr.archived=:arch ORDER BY {order}",
                             {"now": config.fmt_dt(config.now_jst()), "arch": 1 if archived else 0}).fetchall()
-    return [dict(r) for r in rows]
+    return [with_season(dict(r)) for r in rows]
 
 
 @app.post("/api/tracks/{track_id}/archive")

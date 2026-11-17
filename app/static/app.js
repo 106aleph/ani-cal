@@ -507,7 +507,18 @@ async function renderTracks(archived = false) {
       : '<p class="empty">登録作品はまだありません。「作品一覧」で媒体を選んで登録してください。</p>';
     return;
   }
-  root.innerHTML = tracks.map(t => `
+  // 視聴済みタブは、放送クールの新しい順 → 名前順に並べ、クールの境目に見出しを出す
+  const shown = !archived ? tracks : tracks.slice().sort((a, b) =>
+    (b.season_key ?? -1) - (a.season_key ?? -1) || a.display_title.localeCompare(b.display_title, 'ja'));
+  let prevSeason;
+  root.innerHTML = shown.map(t => {
+    let head = '';
+    if (archived && t.season_key !== prevSeason) {
+      prevSeason = t.season_key;
+      const n = shown.filter(x => x.season_key === t.season_key).length;
+      head = `<h3 class="seasonhead">${esc(t.season || '放送時期不明')} <span class="muted small">${n}作品</span></h3>`;
+    }
+    return head + `
     <details class="track" data-id="${t.id}" ${state.openTracks.has(t.id) ? 'open' : ''} style="--h:${hue(animeKey(t))}">
       <summary>
         <span class="bar"></span>
@@ -533,7 +544,8 @@ async function renderTracks(archived = false) {
         ${t.note ? `<p class="note">${esc(t.note)}</p>` : ''}
         <div class="eps" data-id="${t.id}"><p class="muted small">読み込み中…</p></div>
       </div>
-    </details>`).join('');
+    </details>`;
+  }).join('');
   for (const d of $$('details.track[open]', root)) loadEpisodes(Number(d.dataset.id));
 }
 

@@ -54,7 +54,7 @@ SYNC_MAX_FAILURES = _int("SYNC_MAX_FAILURES", 5)             # 自動取得が�
 SKIP_REBROADCAST = _bool("SKIP_REBROADCAST", True)
 
 # 新作一覧
-NEW_CATS = _intset("NEW_CATS", "1")                          # しょぼいカレンダーのCat (1=アニメ)
+NEW_CATS = _intset("NEW_CATS", "1,10")                       # しょぼいカレンダーのCat (1=アニメ, 10=アニメ(終了/再放送))
 NET_GROUP_IDS = _intset("NET_GROUP_IDS")
 NET_GROUP_KEYWORDS = [k for k in os.environ.get(
     "NET_GROUP_KEYWORDS", "ネット,インターネット,配信,web").split(",") if k]

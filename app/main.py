@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
 import db
@@ -23,6 +23,9 @@ SEASONS = ["冬", "春", "夏", "秋"]
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    if not config.SYOBOI_UA_URL:
+        logging.getLogger("app").warning(
+            "SYOBOI_UA_URL が未設定です。連絡方法を載せた公開ページのURLを .env に設定してください（README 参照）")
     sync.start_scheduler()
     notify.start()
     yield
@@ -110,14 +113,18 @@ def generate_episodes(conn, track_id, base_number, base_start, until, interval_d
 
 
 # ---------------------------------------------------------------- models
+MAX_EPISODES = 500        # 手動作成・予測で作れる話数の上限
+MAX_INTERVAL_DAYS = 365   # 話の間隔（日）の上限
+
+
 class TrackCreate(BaseModel):
     tid: int | None = None
     chid: int | None = None
     title: str | None = None
     platform: str | None = None
     first_start: str | None = None
-    episodes: int | None = None
-    interval_days: int = 7
+    episodes: int | None = Field(None, ge=1, le=MAX_EPISODES)
+    interval_days: int = Field(7, ge=1, le=MAX_INTERVAL_DAYS)
 
 
 class TrackUpdate(BaseModel):
@@ -137,8 +144,8 @@ class EpisodeIn(BaseModel):
 
 
 class GenerateIn(BaseModel):
-    until: int
-    interval_days: int = 7
+    until: int = Field(..., ge=1, le=MAX_EPISODES)
+    interval_days: int = Field(7, ge=1, le=MAX_INTERVAL_DAYS)
 
 
 class BulkWatchIn(BaseModel):

@@ -22,7 +22,7 @@ sudo tailscale serve --bg 8000    # APP_PORT を変えた場合はその番号
 `https://<ホスト名>.<tailnet名>.ts.net/` を tailnet 内の端末で開きます。ブラウザからホーム画面やデスクトップにインストール（PWA）できます。
 
 - `.env` の `SYOBOI_UA_URL` に、連絡方法を載せた公開ページのURLを設定します。しょぼいカレンダーへの User-Agent（`AnimeCalendar/1.0 (+URL)`）に入り、問題があれば運営から連絡できます。変更後は `docker compose up -d`。
-- コンテナは `127.0.0.1` にしか公開せず、アクセスは `tailscale serve` 経由のみです。認証は持たず、Tailscale の ACL で制御する前提です。
+- コンテナは `127.0.0.1` にしか公開せず、アクセスは `tailscale serve` 経由のみです。認証は持たず、Tailscale の ACL で制御する前提なので、**インターネットに直接公開しないでください**。
 - サブパス公開（`--set-path`）は非対応です。他のサービスと併用するときは `--https=8443` など別ポートにしてください。
 
 ## 画面

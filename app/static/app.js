@@ -419,7 +419,11 @@ function bindEventClicks(root, reload) {
 
 /* ============================================================ catalog */
 async function loadCatalog(force = false) {
-  if (!state.catalog || force) state.catalog = await api('/api/catalog');
+  const old = $('#cat-old').checked;
+  if (!state.catalog || force || state.catalogOld !== old) {
+    state.catalog = await api('/api/catalog' + (old ? '?all=true' : ''));
+    state.catalogOld = old;
+  }
   const c = state.catalog;
   const ss = $('#cat-season');
   const prevS = ss.value || store.get('catSeason', String(c.current_season_key));
@@ -744,6 +748,8 @@ function init() {
   bindEventClicks($('#cal-list'), renderCalendar);
 
   ['#cat-season', '#cat-platform', '#cat-net', '#cat-untracked'].forEach(s => $(s).addEventListener('change', renderCatalog));
+  $('#cat-old').checked = store.get('catOld', false);
+  $('#cat-old').addEventListener('change', guard(async () => { store.set('catOld', $('#cat-old').checked); await loadCatalog(); if ($('#cat-old').checked) { $('#cat-season').value = ''; renderCatalog(); } }));
   $('#cat-q').addEventListener('input', renderCatalog);
   $('#cat-list').addEventListener('click', guard(async ev => {
     const b = ev.target.closest('.chip');

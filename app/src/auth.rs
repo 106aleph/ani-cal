@@ -265,6 +265,8 @@ fn create_session(conn: &Connection, uid: i64) -> String {
         "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
         params![sha256_hex(&token), uid, config::fmt_dt(now), config::fmt_dt(now + Duration::days(SESSION_DAYS))],
     );
+    // ログイン・登録・最初の管理者の登録のいずれも、ここでセッションを作る
+    let _ = conn.execute("UPDATE users SET last_login_at=? WHERE id=?", params![config::fmt_dt(now), uid]);
     token
 }
 
@@ -681,7 +683,7 @@ fn admin_count(conn: &Connection) -> i64 {
 fn user_json(conn: &Connection, id: i64) -> Result<Value, ApiErr> {
     let v = db::query_one_json(
         conn,
-        "SELECT u.id, u.username, u.role, u.created_at, u.totp_enabled,
+        "SELECT u.id, u.username, u.role, u.created_at, u.last_login_at, u.totp_enabled,
            (SELECT COUNT(*) FROM tracks t WHERE t.user_id=u.id) AS tracks
          FROM users u WHERE u.id=?",
         [id],
@@ -694,7 +696,7 @@ pub fn list_users() -> ApiResult {
     let conn = db::connect();
     ok(Value::Array(db::query_json(
         &conn,
-        "SELECT u.id, u.username, u.role, u.created_at, u.totp_enabled,
+        "SELECT u.id, u.username, u.role, u.created_at, u.last_login_at, u.totp_enabled,
            (SELECT COUNT(*) FROM tracks t WHERE t.user_id=u.id) AS tracks
          FROM users u ORDER BY u.id",
         [],
@@ -935,14 +937,15 @@ pub fn cli(args: &[String]) -> i32 {
     }
     let conn = db::connect();
     if cmd == "list" {
-        let rows = db::query_json(&conn, "SELECT username, role, totp_enabled, created_at FROM users ORDER BY id", []).unwrap_or_default();
+        let rows = db::query_json(&conn, "SELECT username, role, totp_enabled, created_at, last_login_at FROM users ORDER BY id", []).unwrap_or_default();
         for r in rows {
             println!(
-                "{:<32} {:<6} 2FA:{} 登録:{}",
+                "{:<32} {:<6} 2FA:{} 登録:{} 最終ログイン:{}",
                 r["username"].as_str().unwrap_or(""),
                 r["role"].as_str().unwrap_or(""),
                 if r["totp_enabled"].as_i64() == Some(1) { "あり" } else { "なし" },
-                r["created_at"].as_str().unwrap_or("")
+                r["created_at"].as_str().unwrap_or(""),
+                r["last_login_at"].as_str().unwrap_or("記録なし")
             );
         }
         return 0;

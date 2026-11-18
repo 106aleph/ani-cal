@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS users(
   created_at TEXT NOT NULL,
   totp_secret TEXT,                     -- 2段階認証（TOTP）の秘密鍵（Base32）。確認前の仮の鍵も入る
   totp_enabled INTEGER NOT NULL DEFAULT 0,
-  totp_last_step INTEGER NOT NULL DEFAULT 0   -- 最後に使えたコードの時間枠（使い回し防止）
+  totp_last_step INTEGER NOT NULL DEFAULT 0,  -- 最後に使えたコードの時間枠（使い回し防止）
+  last_login_at TEXT                          -- 最後にログインした日時（登録・ログインの成功時に更新）
 );
 -- 2段階認証のリカバリーコード（SHA-256 だけを保存。1回だけ使える）
 CREATE TABLE IF NOT EXISTS recovery_codes(

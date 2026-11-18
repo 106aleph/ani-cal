@@ -78,6 +78,11 @@ pub fn init() {
             conn.execute_batch(ddl).ok();
         }
     }
+    // 最終ログイン日時。列を足すときは、いま残っているセッションの作成日時（＝直近のログイン）で埋める
+    if !ucols.iter().any(|x| x == "last_login_at") {
+        conn.execute_batch("ALTER TABLE users ADD COLUMN last_login_at TEXT").ok();
+        conn.execute_batch("UPDATE users SET last_login_at=(SELECT MAX(created_at) FROM sessions WHERE sessions.user_id=users.id)").ok();
+    }
     conn.execute_batch(
         "DROP INDEX IF EXISTS uq_tracks_tid_chid;
          CREATE UNIQUE INDEX IF NOT EXISTS uq_tracks_user_tid_chid

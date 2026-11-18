@@ -372,3 +372,7 @@ input[type=date], input[type=datetime-local] { color-scheme: dark; }
 .admin-card .admin-sub { margin: 14px 0 6px; font-size: 13px; color: var(--muted, inherit); }
 .admin-card .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .admin-card .ulist { max-height: none; overflow: visible; margin: 6px 0; }
+
+/* 作品一覧: 視聴中断した作品の媒体は、塗りつぶさず、「視聴中断」と表示する */
+.chip.on.dropped { background: transparent; color: inherit; border-style: dashed; font-weight: 400; }
+.chip .chip-state { font-size: 11px; padding: 0 6px; margin-left: 2px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }

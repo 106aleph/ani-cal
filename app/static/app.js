@@ -380,7 +380,7 @@ async function sessionsDialog() {
     const t = s => (s || '—').replace('T', ' ');
     const r = await formDialog({
       title: 'ログイン中の端末', submit: '閉じる',
-      html: `<p class="muted small">このアカウントでログインしている端末です。心当たりのない端末は、「ログアウト」で解除してください。</p>
+      html: `<p class="muted small">このアカウントでログインしている端末です。心当たりのない端末は、「ログアウト」で解除してください。「不明な端末」は、以前にログインした端末です。次に使われたときに、情報が記録されます。</p>
         <div class="ulist">${list.map(s => `<div class="urow">
           <div class="un"><strong>${esc(deviceName(s.user_agent))}</strong>${s.current ? ' <span class="badge">この端末</span>' : ''}
             <div class="muted small">最終利用 ${esc(t(s.last_used_at))}・ログイン ${esc(t(s.created_at))}</div>

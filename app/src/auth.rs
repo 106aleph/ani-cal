@@ -249,6 +249,14 @@ pub fn from_session(token: &str) -> Option<Cur> {
         let ext = (now + Duration::days(SESSION_DAYS)).min(hard_limit);
         let _ = conn.execute("UPDATE sessions SET expires_at=? WHERE token_hash=?", params![config::fmt_dt(ext), h]);
     }
+    // 端末の情報がまだ無いセッション (この機能より前にログインしたもの) は、最初に使われたときに記録する
+    let (ip, ua) = META.with(|m| m.borrow().clone());
+    if !ua.is_empty() || !ip.is_empty() {
+        let _ = conn.execute(
+            "UPDATE sessions SET user_agent=?, ip=? WHERE token_hash=? AND user_agent IS NULL AND ip IS NULL",
+            params![ua, ip, h],
+        );
+    }
     // 最後に使われた日時（要求のたびに書き込まないよう、10分以上空いたときだけ更新する）
     let stale = used
         .as_deref()

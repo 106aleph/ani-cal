@@ -213,6 +213,8 @@ fn handle(mut rq: Request) {
     let (path, qs) = url.split_once('?').unwrap_or((&url, ""));
     let path = percent_decode(path);
     let query = parse_query(qs);
+    // このリクエストの接続元と User-Agent。ログインしたとき (と、情報のない古いセッションが使われたとき) に、セッションへ記録する
+    auth::set_meta(&client_id(&rq), &req_header(&rq, "User-Agent").unwrap_or_default());
 
     if !host_allowed(&rq) {
         return respond_json(rq, 421, &util::msg("このホスト名では受け付けていません"));
@@ -295,8 +297,6 @@ fn handle(mut rq: Request) {
         return respond_json(rq, 404, &json!({"detail": "Not Found"}));
     }
     let secure = is_https(&rq);
-    // ログインしたときに、セッションへ記録する (接続元と User-Agent)
-    auth::set_meta(&client_id(&rq), &req_header(&rq, "User-Agent").unwrap_or_default());
     // 認証が要らないのは、稼働確認とログインだけ
     if method == "GET" && path == "/api/health" {
         return respond_json(rq, 200, &json!({"ok": true}));

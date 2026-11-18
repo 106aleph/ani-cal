@@ -4,15 +4,14 @@
 
 ## 必要な環境
 
-- Linux ホスト（動作確認: Debian 13）
-- Git
-- Docker と Docker Compose v2.24 以上
-- Tailscale（tailnet で使う場合。管理画面で MagicDNS と HTTPS Certificates を有効化）
-- `cal.syoboi.jp` と各社 Push サービスへの HTTPS 通信（外向き）
+- Linux ホスト（動作確認: Debian 13）。2コア・2GB・空きディスク 5GB 以上（ビルド時。起動後は約 10〜15MB で動く）
+- Docker と Docker Compose v2.24 以上（ビルドと実行に必要。Rust のツールチェーンはホストに不要）
+- Git と SSH 鍵（非公開リポジトリの取得用）
+- tailnet で使う場合は Tailscale（管理画面で MagicDNS と HTTPS Certificates を有効化。通知には HTTPS が必要）
+- 外向きの HTTPS 通信（実行時: `cal.syoboi.jp` と各社 Push サービス。ビルド時: Docker Hub・crates.io・Alpine のパッケージサーバー）
+- バックアップを取る場合は sqlite3（任意）
 
-### 推奨スペック
-
-- 2コア・2GB・空きディスク 5GB 以上
+アプリは1つのコンテナで動き、ビルドはコンテナの中で行われます。
 
 ## セットアップ
 

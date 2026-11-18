@@ -814,7 +814,7 @@ async function renderTracks(kind = 0) {
   root._tracks = tracks;
   if (!tracks.length) {
     root.innerHTML = kind === 2
-      ? '<p class="empty">視聴を中断した作品はありません。「登録作品」で「視聴を中断」を押すと、ここに表示されます。</p>'
+      ? '<p class="empty">視聴中断した作品はありません。「登録作品」で「視聴中断」を押すと、ここに表示されます。</p>'
       : archived
       ? '<p class="empty">視聴済みの作品はまだありません。「登録作品」で全話を視聴済みにして「視聴済みに移す」を押すと、ここに表示されます。</p>'
       : '<p class="empty">登録作品はまだありません。「作品一覧」で媒体を選んで登録してください。</p>';
@@ -852,7 +852,7 @@ async function renderTracks(kind = 0) {
           ${t.tid ? '<button data-act="resync">取得データを再反映</button>' : ''}
           <button data-act="archive" class="primary" ${allWatched(t) ? '' : 'disabled'} title="${archiveBtnTitle(t)}">視聴済みに移す</button>`}
           <span class="spacer"></span>
-          ${archived ? '' : '<button data-act="drop" class="danger" title="途中で見るのをやめた作品を「視聴中断」へ移します（カレンダー・通知から外れます）">視聴を中断</button>'}
+          ${archived ? '' : '<button data-act="drop" class="danger" title="途中で見るのをやめた作品を「視聴中断」へ移します（カレンダー・通知から外れます）">視聴中断</button>'}
           <button data-act="del" class="danger">登録解除</button>
         </div>
         ${t.note ? `<p class="note">${esc(t.note)}</p>` : ''}

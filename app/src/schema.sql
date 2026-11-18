@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS tracks(
   auto_sync INTEGER NOT NULL DEFAULT 1,
   note TEXT,
   created_at TEXT NOT NULL,
-  archived INTEGER NOT NULL DEFAULT 0,   -- 1=視聴済みに移した作品 / 2=視聴を中断した作品（どちらもカレンダー・未視聴一覧に出さない）
+  archived INTEGER NOT NULL DEFAULT 0,   -- 1=視聴済みに移した作品 / 2=視聴中断した作品（どちらもカレンダー・未視聴一覧に出さない）
   archived_at TEXT
 );
 

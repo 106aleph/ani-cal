@@ -478,7 +478,7 @@ fn archive(id: &str, to_archive: bool) -> ApiResult {
     })
 }
 
-/// 視聴を中断した作品へ移す（話数に関係なくいつでも可）。戻すときは unarchive
+/// 視聴中断した作品へ移す（話数に関係なくいつでも可）。戻すときは unarchive
 fn drop_track(id: &str) -> ApiResult {
     let id = parse_id(id)?;
     db::with_tx(|conn| {

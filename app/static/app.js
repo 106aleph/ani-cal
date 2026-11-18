@@ -283,7 +283,12 @@ async function renderUsersPanel() {
 function bindUsersPanel() {
   const box = $('#admin-users'), ibox = $('#admin-invites');
   // 操作のあとは、一覧を読み直す
-  const act = fn => async ev => { try { await fn(ev); } catch (e) { toast(e.message, true); } await renderUsersPanel().catch(() => { }); };
+  // 実際に操作したとき（と失敗したとき）だけ一覧を読み直す。クリックのたびに作り直すと、プルダウンが開いた瞬間に閉じてしまう
+  const act = fn => async ev => {
+    let changed = false;
+    try { changed = !!await fn(ev); } catch (e) { toast(e.message, true); changed = true; }
+    if (changed) await renderUsersPanel().catch(() => { });
+  };
   $('#invite-new').addEventListener('click', act(async () => {
     const a = await formDialog({
       title: '招待コードを発行', submit: '発行',
@@ -291,14 +296,14 @@ function bindUsersPanel() {
     });
     if (a.action !== 'ok') return;
     await api('/api/invites', { method: 'POST', body: a.values });
-    toast('招待コードを発行しました');
+    toast('招待コードを発行しました'); return true;
   }));
   ibox.addEventListener('focusin', ev => ev.target.select?.());
   ibox.addEventListener('click', act(async ev => {
     const row = ev.target.closest('.urow');
     if (row && ev.target.matches('[data-delinv]')) {
       await api(`/api/invites/${row.dataset.inv}`, { method: 'DELETE' });
-      toast('招待コードを取り消しました');
+      toast('招待コードを取り消しました'); return true;
     }
   }));
   box.addEventListener('change', act(async ev => {
@@ -306,7 +311,7 @@ function bindUsersPanel() {
     if (row && ev.target.matches('[data-role]')) {
       await api(`/api/users/${row.dataset.id}`, { method: 'PATCH', body: { role: ev.target.value } });
       if (Number(row.dataset.id) === state.me.id) location.reload();
-      toast('権限を変更しました');
+      toast('権限を変更しました'); return true;
     }
   }));
   box.addEventListener('click', act(async ev => {
@@ -321,15 +326,15 @@ function bindUsersPanel() {
       });
       if (p.action !== 'ok') return;
       await api(`/api/users/${id}`, { method: 'PATCH', body: { password: p.values.password } });
-      toast('パスワードを再設定しました');
+      toast('パスワードを再設定しました'); return true;
     } else if (ev.target.matches('[data-totp]')) {
       if (!await confirmDialog(`「${name}」の2段階認証を解除しますか？認証アプリを失くした人向けです。本人のログインは解除されます。`, '解除')) return;
       await api(`/api/users/${id}`, { method: 'PATCH', body: { reset_totp: true } });
-      toast('2段階認証を解除しました');
+      toast('2段階認証を解除しました'); return true;
     } else if (ev.target.matches('[data-del]')) {
       if (!await confirmDialog(`「${name}」を削除しますか？登録作品と視聴記録も削除されます。`, '削除')) return;
       await api(`/api/users/${id}`, { method: 'DELETE' });
-      toast('ユーザーを削除しました');
+      toast('ユーザーを削除しました'); return true;
     }
   }));
 }

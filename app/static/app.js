@@ -814,9 +814,9 @@ async function renderTracks(kind = 0) {
           <button data-act="gen" title="最後の話の日時から一定間隔で残りの話を作成">間隔で話を作成</button>
           <button data-act="watchall">配信済みを全て視聴済みに</button>
           ${t.tid ? '<button data-act="resync">取得データを再反映</button>' : ''}
-          <button data-act="archive" class="primary" ${allWatched(t) ? '' : 'disabled'} title="${archiveBtnTitle(t)}">視聴済みに移す</button>
-          <button data-act="drop" title="途中で見るのをやめた作品を「視聴中断」へ移します（カレンダー・通知から外れます）">視聴を中断</button>`}
+          <button data-act="archive" class="primary" ${allWatched(t) ? '' : 'disabled'} title="${archiveBtnTitle(t)}">視聴済みに移す</button>`}
           <span class="spacer"></span>
+          ${archived ? '' : '<button data-act="drop" class="danger" title="途中で見るのをやめた作品を「視聴中断」へ移します（カレンダー・通知から外れます）">視聴を中断</button>'}
           <button data-act="del" class="danger">登録解除</button>
         </div>
         ${t.note ? `<p class="note">${esc(t.note)}</p>` : ''}

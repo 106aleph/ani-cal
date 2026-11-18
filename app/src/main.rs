@@ -367,7 +367,8 @@ fn healthcheck() -> i32 {
     let port = config::get().bind.rsplit(':').next().unwrap_or("8000").to_string();
     let Ok(mut s) = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) else { return 1 };
     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(3)));
-    let _ = s.write_all(b"GET /api/health HTTP/1.0\r\n\r\n");
+    // Host を付ける（ALLOWED_HOSTS が設定されていても、127.0.0.1 は常に許可される）
+    let _ = s.write_all(b"GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n");
     let mut out = String::new();
     let _ = s.read_to_string(&mut out);
     if out.starts_with("HTTP/1.1 200") || out.starts_with("HTTP/1.0 200") { 0 } else { 1 }

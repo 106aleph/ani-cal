@@ -339,7 +339,7 @@ async function renderAdmin() {
 
 async function accountDialog() {
   const me = state.me;
-  const acts = [...(me.admin ? [['admin', '管理画面を開く']] : []),['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['others', '他の端末をすべてログアウト']];
+  const acts = [['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['others', '他の端末をすべてログアウト']];
   const r = await formDialog({
     title: 'アカウント', submit: '閉じる',
     html: `<p><strong>${esc(me.username)}</strong> <span class="badge">${me.admin ? '管理者' : '一般'}</span></p>
@@ -347,8 +347,7 @@ async function accountDialog() {
         <button type="button" class="danger" data-do="logout">ログアウト</button></div>`,
     setup: dlg => dlg.addEventListener('click', ev => { const b = ev.target.closest('[data-do]'); if (b) dlg.close(b.dataset.do); }),
   });
-  if (r.action === 'admin') { state.tab = 'admin'; store.set('tab', 'admin'); await renderTab(); }
-  else if (r.action === 'password') await passwordDialog();
+  if (r.action === 'password') await passwordDialog();
   else if (r.action === 'totp') await totpDialog();
   else if (r.action === 'ics') await icsDialog();
   else if (r.action === 'others') {

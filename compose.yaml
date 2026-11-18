@@ -18,3 +18,18 @@ services:
     volumes:
       - ./data:/data
     restart: unless-stopped
+    # コンテナの権限を最小限にする（万一アプリが乗っ取られても、できることを減らす）
+    read_only: true            # 書き込めるのは /data（DB）と /tmp だけ
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:                   # 起動時に /data の所有者を合わせ、非 root ユーザーに切り替えるためだけに必要
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m

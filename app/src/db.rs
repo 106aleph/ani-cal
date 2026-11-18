@@ -14,6 +14,17 @@ pub fn connect() -> Connection {
     conn
 }
 
+/// DB ファイルを、所有者だけが読み書きできるようにする（パスワードのハッシュや各種の鍵が入っているため）
+pub fn restrict_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let p = &config::get().db_path;
+    for f in [p.clone(), format!("{}-wal", p), format!("{}-shm", p)] {
+        if std::path::Path::new(&f).exists() {
+            let _ = std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
 /// 複数の文をまとめて反映する。Err なら巻き戻す
 pub fn with_tx<T, E: From<rusqlite::Error>>(
     f: impl FnOnce(&Connection) -> std::result::Result<T, E>,
@@ -49,6 +60,32 @@ pub fn init() {
         )
         .ok();
     }
+    // ユーザーごとの登録（旧バージョンのDBには user_id が無い）
+    if !tcols.iter().any(|c| c == "user_id") {
+        conn.execute_batch("ALTER TABLE tracks ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE").ok();
+    }
+    if !cols("push_subs").iter().any(|c| c == "user_id") {
+        conn.execute_batch("ALTER TABLE push_subs ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE").ok();
+    }
+    // 2段階認証（旧バージョンのDBには列が無い）
+    let ucols = cols("users");
+    for (c, ddl) in [
+        ("totp_secret", "ALTER TABLE users ADD COLUMN totp_secret TEXT"),
+        ("totp_enabled", "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"),
+        ("totp_last_step", "ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !ucols.iter().any(|x| x == c) {
+            conn.execute_batch(ddl).ok();
+        }
+    }
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS uq_tracks_tid_chid;
+         CREATE UNIQUE INDEX IF NOT EXISTS uq_tracks_user_tid_chid
+           ON tracks(user_id, tid, chid) WHERE tid IS NOT NULL AND chid IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS idx_tracks_user ON tracks(user_id);",
+    )
+    .expect("インデックスの作成に失敗");
+    crate::auth::bootstrap(&conn);
     if !cols("sync_log").iter().any(|c| c == "duration_sec") {
         conn.execute_batch("ALTER TABLE sync_log ADD COLUMN duration_sec REAL").ok();
     }

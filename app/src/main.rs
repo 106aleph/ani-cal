@@ -1,5 +1,6 @@
 //! アニメ配信カレンダー（しょぼいカレンダーから配信予定を取得して視聴記録するセルフホストアプリ）
 mod api;
+mod auth;
 mod config;
 mod db;
 mod log;
@@ -57,6 +58,61 @@ fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap()
 }
 
+/// すべての応答に付けるセキュリティ関連のヘッダ
+fn with_sec<R: std::io::Read>(r: Response<R>) -> Response<R> {
+    r.with_header(header(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
+         frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+    ))
+    .with_header(header("X-Content-Type-Options", "nosniff"))
+    .with_header(header("X-Frame-Options", "DENY"))
+    .with_header(header("Referrer-Policy", "no-referrer")) // 購読URL（トークン入り）を外部へ漏らさない
+    .with_header(header("Cross-Origin-Opener-Policy", "same-origin"))
+    .with_header(header("Cross-Origin-Resource-Policy", "same-origin"))
+    .with_header(header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"))
+    // http で受けた場合、ブラウザは無視する。https で一度開けば、以後は https だけを使わせる
+    .with_header(header("Strict-Transport-Security", "max-age=31536000; includeSubDomains"))
+}
+
+/// Host ヘッダの検査（ALLOWED_HOSTS が設定されているとき）。127.0.0.1 / localhost は常に許可する
+fn host_allowed(rq: &Request) -> bool {
+    let allowed = &config::get().allowed_hosts;
+    if allowed.is_empty() {
+        return true;
+    }
+    let host = req_header(rq, "Host").unwrap_or_default().to_lowercase();
+    let name = if host.starts_with('[') { host.split(']').next().unwrap_or("").trim_start_matches('[').to_string() } else { host.split(':').next().unwrap_or("").to_string() };
+    matches!(name.as_str(), "127.0.0.1" | "localhost" | "::1") || allowed.iter().any(|a| *a == name || *a == host)
+}
+
+/// 別のサイトからのリクエスト（CSRF）を弾く: Origin があるなら、このサーバーのホストと同じであること
+fn same_origin(rq: &Request) -> bool {
+    match req_header(rq, "Sec-Fetch-Site").as_deref() {
+        Some("same-origin") | Some("none") => return true, // ブラウザが保証する
+        Some(_) => return false,                           // same-site / cross-site
+        None => {}
+    }
+    let Some(origin) = req_header(rq, "Origin") else { return true }; // ブラウザ以外（curl など）
+    let o = origin.split_once("://").map(|(_, h)| h).unwrap_or(&origin);
+    [req_header(rq, "Host"), req_header(rq, "X-Forwarded-Host")].into_iter().flatten().any(|h| h.eq_ignore_ascii_case(o))
+}
+
+/// 失敗回数・回数制限のための接続元。プロキシ（tailscale serve / funnel など）の後ろでは X-Forwarded-For を使い、無ければ直接の接続元。
+/// X-Forwarded-For は、クライアントが勝手に書き足せる。プロキシが追記する**いちばん右**の値だけを信用する
+/// （左側は偽装できる）。コンテナは 127.0.0.1 でしか待ち受けないので、直接アクセスできるのはプロキシだけ
+fn client_id(rq: &Request) -> String {
+    req_header(rq, "X-Forwarded-For")
+        .and_then(|v| v.rsplit(',').next().map(|s| s.trim().chars().take(64).collect::<String>()))
+        .filter(|s| !s.is_empty())
+        .or_else(|| rq.remote_addr().map(|a| a.ip().to_string()))
+        .unwrap_or_default()
+}
+
+fn is_json(rq: &Request) -> bool {
+    req_header(rq, "Content-Type").map(|v| v.trim().to_lowercase().starts_with("application/json")).unwrap_or(false)
+}
+
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -65,7 +121,7 @@ fn percent_decode(s: &str) -> String {
         match b[i] {
             b'+' => out.push(b' '),
             b'%' if i + 2 < b.len() => {
-                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                if let Some(v) = s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok()) {
                     out.push(v);
                     i += 2;
                 } else {
@@ -90,17 +146,43 @@ fn parse_query(q: &str) -> HashMap<String, String> {
 }
 
 fn respond_json(rq: Request, status: u16, body: &Value) {
+    respond_json_cookie(rq, status, body, None)
+}
+
+/// cookie: Set-Cookie に入れる値（ログイン・ログアウト時だけ）
+fn respond_json_cookie(rq: Request, status: u16, body: &Value, cookie: Option<String>) {
     let _ = if status == 204 {
-        rq.respond(Response::empty(204))
+        let mut r = with_sec(Response::empty(204));
+        if let Some(c) = &cookie {
+            r = r.with_header(header("Set-Cookie", c));
+        }
+        rq.respond(r)
     } else {
-        let s = body.to_string();
-        rq.respond(
-            Response::from_string(s)
-                .with_status_code(status)
-                .with_header(header("Content-Type", "application/json"))
-                .with_header(header("Cache-Control", "no-store")),
-        )
+        let mut r = with_sec(Response::from_string(body.to_string()))
+            .with_status_code(status)
+            .with_header(header("Content-Type", "application/json"))
+            .with_header(header("Cache-Control", "no-store"));
+        if let Some(c) = &cookie {
+            r = r.with_header(header("Set-Cookie", c));
+        }
+        rq.respond(r)
     };
+}
+
+fn req_header(rq: &Request, name: &'static str) -> Option<String> {
+    rq.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str().to_string())
+}
+
+/// Cookie ヘッダからセッションのトークンを取り出す
+fn session_token(rq: &Request) -> Option<String> {
+    let c = req_header(rq, "Cookie")?;
+    auth::token_from_cookie_header(&c, is_https(rq))
+}
+
+/// HTTPS 終端のプロキシ（tailscale serve / funnel など）の後ろにいるときは、Cookie に Secure を付ける。
+/// プロキシが X-Forwarded-Proto を付けない構成では、COOKIE_SECURE=1 で常に Secure にする
+fn is_https(rq: &Request) -> bool {
+    config::get().cookie_secure || req_header(rq, "X-Forwarded-Proto").map(|v| v.to_lowercase().contains("https")).unwrap_or(false)
 }
 
 fn respond_asset(rq: Request, a: &Asset) {
@@ -110,7 +192,7 @@ fn respond_asset(rq: Request, a: &Asset) {
         return;
     }
     let _ = rq.respond(
-        Response::from_data(a.bytes.to_vec())
+        with_sec(Response::from_data(a.bytes.to_vec()))
             .with_header(header("Content-Type", a.mime))
             .with_header(header("ETag", &a.etag))
             .with_header(header("Cache-Control", "no-cache")),
@@ -132,6 +214,13 @@ fn handle(mut rq: Request) {
     let path = percent_decode(path);
     let query = parse_query(qs);
 
+    if !host_allowed(&rq) {
+        return respond_json(rq, 421, &util::msg("このホスト名では受け付けていません"));
+    }
+    if method == "OTHER" {
+        return respond_json(rq, 405, &util::msg("Method Not Allowed"));
+    }
+
     // 静的ファイル
     if method == "GET" {
         let found = match path.as_str() {
@@ -144,10 +233,22 @@ fn handle(mut rq: Request) {
             return respond_asset(rq, a);
         }
         if path == "/calendar.ics" {
-            return match api::ics(&query) {
+            // 購読ソフトは Cookie を持てないので、URL のトークンでも認証できる
+            if !auth::rate_ok("ics", &client_id(&rq), 120, 60) {
+                return respond_json(rq, 429, &util::msg("リクエストが多すぎます。しばらく待ってください"));
+            }
+            let who = query.get("token").and_then(|t| auth::from_ics_token(t)).or_else(|| session_token(&rq).and_then(|t| auth::from_session(&t)));
+            let Some(who) = who else {
+                return respond_json(rq, 401, &util::msg("ログインが必要です"));
+            };
+            auth::set_current(Some(who));
+            let res = catch_unwind(AssertUnwindSafe(|| api::ics(&query)));
+            auth::set_current(None);
+            let res = res.unwrap_or_else(|_| Err(util::err(500, "internal error")));
+            return match res {
                 Ok(s) => {
                     let _ = rq.respond(
-                        Response::from_string(s)
+                        with_sec(Response::from_string(s))
                             .with_header(header("Content-Type", "text/calendar; charset=utf-8"))
                             .with_header(header("Cache-Control", "no-store")),
                     );
@@ -157,10 +258,29 @@ fn handle(mut rq: Request) {
         }
     }
 
+    // CSRF 対策: 状態を変える要求は、同じオリジンからで、本文があれば JSON であること
+    // （JSON 以外の Content-Type は、別サイトのフォームからも送れてしまうため）
+    if method != "GET" && path.starts_with("/api/") {
+        if !same_origin(&rq) {
+            return respond_json(rq, 403, &util::msg("別のサイトからのリクエストは受け付けません"));
+        }
+        if rq.body_length().unwrap_or(0) > 0 && !is_json(&rq) {
+            return respond_json(rq, 415, &util::msg("Content-Type は application/json にしてください"));
+        }
+    }
+
     // 本文（JSON）
     let mut raw = String::new();
     if matches!(method.as_str(), "POST" | "PATCH" | "PUT") {
-        let _ = rq.as_reader().take(1 << 20).read_to_string(&mut raw);
+        // 本文の大きさに上限（認証まわりは小さく）。超えたら読まずに断る
+        let limit: usize = if path.starts_with("/api/auth/") { 8 * 1024 } else { 256 * 1024 };
+        if rq.body_length().unwrap_or(0) > limit {
+            return respond_json(rq, 413, &util::msg("リクエストが大きすぎます"));
+        }
+        let _ = rq.as_reader().take(limit as u64 + 1).read_to_string(&mut raw);
+        if raw.len() > limit {
+            return respond_json(rq, 413, &util::msg("リクエストが大きすぎます"));
+        }
     }
     let body: Value = if raw.trim().is_empty() {
         Value::Null
@@ -174,13 +294,70 @@ fn handle(mut rq: Request) {
     if !path.starts_with("/api/") {
         return respond_json(rq, 404, &json!({"detail": "Not Found"}));
     }
+    let secure = is_https(&rq);
+    // 認証が要らないのは、稼働確認とログインだけ
+    if method == "GET" && path == "/api/health" {
+        return respond_json(rq, 200, &json!({"ok": true}));
+    }
+    // ログイン・登録の連打を、接続元ごとに制限する（Argon2 の計算で CPU・メモリを使わせる攻撃の抑止）
+    if method == "POST" && matches!(path.as_str(), "/api/auth/login" | "/api/auth/register" | "/api/auth/setup")
+        && !auth::rate_ok("auth", &client_id(&rq), 20, 60)
+    {
+        return respond_json(rq, 429, &util::msg("リクエストが多すぎます。しばらく待ってからやり直してください"));
+    }
+    if method == "POST" && path == "/api/auth/login" {
+        let client = client_id(&rq);
+        return match auth::login(&body, &client) {
+            // 2段階認証の入力待ちのときは、トークンが空（Cookie は発行しない）
+            Ok((me, token)) if token.is_empty() => respond_json(rq, 200, &me),
+            Ok((me, token)) => respond_json_cookie(rq, 200, &me, Some(auth::cookie_value(&token, secure))),
+            Err(e) => respond_json(rq, e.status, &util::msg(&e.detail)),
+        };
+    }
+    if method == "GET" && path == "/api/auth/setup" {
+        return respond_json(rq, 200, &json!({"needed": auth::setup_needed()}));
+    }
+    if method == "POST" && path == "/api/auth/setup" {
+        return match auth::setup(&body) {
+            Ok((me, token)) => respond_json_cookie(rq, 201, &me, Some(auth::cookie_value(&token, secure))),
+            Err(e) => respond_json(rq, e.status, &util::msg(&e.detail)),
+        };
+    }
+    if method == "POST" && path == "/api/auth/register" {
+        let client = client_id(&rq);
+        return match auth::register(&body, &client) {
+            Ok((me, token)) => respond_json_cookie(rq, 201, &me, Some(auth::cookie_value(&token, secure))),
+            Err(e) => respond_json(rq, e.status, &util::msg(&e.detail)),
+        };
+    }
+    let who = session_token(&rq).and_then(|t| auth::from_session(&t));
+    if method == "POST" && path == "/api/auth/logout" {
+        if let Some(w) = who {
+            auth::set_current(Some(w));
+            auth::logout();
+            auth::set_current(None);
+        }
+        return respond_json_cookie(rq, 204, &Value::Null, Some(auth::clear_cookie(secure)));
+    }
+    let Some(who) = who else {
+        return respond_json(rq, 401, &util::msg("ログインが必要です"));
+    };
+    // 2段階認証が必須の設定なのに、まだ有効にしていないユーザーは、設定に必要な操作しかできない
+    if auth::needs_2fa(who.uid, who.admin) && !matches!(path.as_str(), "/api/auth/me" | "/api/auth/password") && !path.starts_with("/api/auth/totp/") {
+        return respond_json(rq, 403, &json!({"detail": "2段階認証の設定が必要です", "code": "2fa_required"}));
+    }
+    auth::set_current(Some(who));
     let req = api::Req { method, path, query, body };
     let result = catch_unwind(AssertUnwindSafe(|| api::route(&req)));
+    auth::set_current(None);
     match result {
         Ok(Some(Ok((status, v)))) => respond_json(rq, status, &v),
         Ok(Some(Err(e))) => respond_json(rq, e.status, &util::msg(&e.detail)),
         Ok(None) => respond_json(rq, 404, &json!({"detail": "Not Found"})),
-        Err(_) => respond_json(rq, 500, &util::msg("internal error")),
+        Err(_) => {
+            error!("app", "panic while handling {} {}", req.method, req.path);
+            respond_json(rq, 500, &util::msg("internal error"))
+        }
     }
 }
 
@@ -200,8 +377,14 @@ fn main() {
     if std::env::args().any(|a| a == "--healthcheck") {
         std::process::exit(healthcheck());
     }
+    // 管理用コマンド（サーバーは起動しない）: `ani-cal user ...`
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(|s| s.as_str()) == Some("user") {
+        std::process::exit(auth::cli(&args[1..]));
+    }
     let cfg = config::get();
     db::init();
+    db::restrict_permissions();
     if cfg.syoboi_ua_url.is_empty() {
         warn!("app", "SYOBOI_UA_URL が未設定です。連絡方法を載せた公開ページのURLを .env に設定してください（README 参照）");
     }
@@ -217,7 +400,7 @@ fn main() {
     let server = Arc::new(Server::http(&cfg.bind).unwrap_or_else(|e| panic!("{} で待ち受けできません: {}", cfg.bind, e)));
     info!("app", "listening on {}", cfg.bind);
     let mut workers = vec![];
-    for i in 0..4 {
+    for i in 0..8 {
         let s = server.clone();
         workers.push(
             std::thread::Builder::new()

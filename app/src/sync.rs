@@ -129,7 +129,7 @@ pub fn apply_track(conn: &Connection, track_id: i64) -> rusqlite::Result<i64> {
         }
     }
     // 視聴済みに移した作品に、新しい未視聴の話が増えたら登録作品へ戻す
-    if archived != 0 {
+    if archived == 1 {
         let any: Option<i64> = conn
             .query_row("SELECT 1 FROM episodes WHERE track_id=? AND hidden=0 AND watched=0", [track_id], |r| r.get(0))
             .ok();
@@ -164,6 +164,9 @@ fn finish_log(log_id: Option<i64>, status: &str, programs: usize, titles: usize,
         error!("sync", "failed to write sync_log");
     }
 }
+
+/// 429 を受けた後に自動取得を止める時間（分）
+const RATE_LIMIT_COOLDOWN_MIN: i64 = 180;
 
 fn meta_i64(conn: &Connection, key: &str) -> i64 {
     db::get_meta(conn, key).and_then(|v| v.trim().parse().ok()).unwrap_or(0)
@@ -436,6 +439,11 @@ pub fn run_sync(start_date: Option<NaiveDateTime>, end_date: Option<NaiveDateTim
         Err(SyErr::Msg(e)) => {
             error!("sync", "sync failed: {}", e);
             update(|s| s.last_error = Some(e.clone()));
+            if e.contains("制限されています") {
+                // 429 を受けたら、手動・自動を問わず一定時間は自動取得を送らない
+                let until = config::now() + Duration::minutes(RATE_LIMIT_COOLDOWN_MIN);
+                db::set_meta(&db::connect(), "limited_until", &until.format(config::DT_FMT).to_string());
+            }
             finish_log(log_id, "error", total, n_titles, &e, t0.elapsed().as_secs_f64());
         }
     }
@@ -482,13 +490,14 @@ fn scheduler_loop() {
     let mut first = true;
     loop {
         let r = std::panic::catch_unwind(|| {
-            let (last, paused, fails, last_fail) = {
+            let (last, paused, fails, last_fail, limited_until) = {
                 let conn = db::connect();
                 (
                     db::get_meta(&conn, "last_success"),
                     db::get_meta(&conn, "auto_paused").as_deref() == Some("1"),
                     meta_i64(&conn, "fail_count"),
                     db::get_meta(&conn, "last_fail_at"),
+                    db::get_meta(&conn, "limited_until"),
                 )
             };
             let now = config::now();
@@ -506,6 +515,11 @@ fn scheduler_loop() {
                     // 失敗後は待ち時間を倍々に延ばす（10分→20分→…最大 SYNC_INTERVAL_HOURS）
                     let wait = Duration::minutes(10 * (1i64 << (fails - 1).min(20))).min(interval);
                     due = now - lf >= wait;
+                }
+            }
+            if let Some(u) = limited_until.as_deref().and_then(|s| NaiveDateTime::parse_from_str(s, config::DT_FMT).ok()) {
+                if now < u {
+                    due = false; // 429 の直後は間隔を空ける
                 }
             }
             if paused {

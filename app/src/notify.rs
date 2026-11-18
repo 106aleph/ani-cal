@@ -4,6 +4,7 @@
 //! - VAPID 鍵は初回起動時に生成して meta テーブルに保存（Python 版の PKCS#8 PEM と互換）
 //! - 通知ループが30秒ごとに「開始 N 分前〜開始3分後」の未視聴の話を探して送信する（送信済みは push_sent で重複防止）
 //! - 暗号化は RFC 8291（aes128gcm）、認証は RFC 8292（VAPID, ES256）
+use crate::auth;
 use crate::util::*;
 use crate::{config, db, error, info, warn};
 use aes_gcm::{aead::Aead, Aes128Gcm, KeyInit, Nonce};
@@ -70,11 +71,23 @@ fn origin_of(url: &str) -> Option<String> {
     Some(format!("https://{}", host))
 }
 
+/// https の URL からホスト名を取り出す。ユーザー情報（`@`）・バックスラッシュ・`#`・`?`・空白などが
+/// 混じる URL は、URL パーサーによって解釈が分かれて許可リストをすり抜けられるので、受け付けない
 fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
-    let hp = rest.split('/').next()?;
-    let hp = hp.rsplit('@').next()?;
-    Some(hp.split(':').next()?.to_lowercase())
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (authority, None),
+    };
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && !host.contains("..")
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let port_ok = port.is_none_or(|p| p == "443");
+    (host_ok && port_ok && !url.contains(|c: char| c == '\\' || c == '@' || c.is_whitespace() || c.is_control())).then(|| host.to_lowercase())
 }
 
 fn check_endpoint(endpoint: &str) -> Result<(), ApiErr> {
@@ -156,7 +169,8 @@ fn vapid_header(endpoint: &str) -> Result<String, String> {
 fn send(sub: &Sub, payload: &Value, ttl: i64) -> Result<(), PushErr> {
     let body = encrypt(sub, payload.to_string().as_bytes()).map_err(PushErr::Other)?;
     let auth = vapid_header(&sub.endpoint).map_err(PushErr::Other)?;
-    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)).build();
+    // リダイレクトは追わない（許可した Push サービスから、内部のアドレスなどへ飛ばされないように）
+    let agent = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)).redirects(0).build();
     let r = agent
         .post(&sub.endpoint)
         .set("Authorization", &auth)
@@ -202,7 +216,9 @@ pub fn get_key() -> ApiResult {
 
 pub fn get_settings(endpoint: &str) -> ApiResult {
     let conn = db::connect();
-    let lead: Option<i64> = conn.query_row("SELECT lead_min FROM push_subs WHERE endpoint=?", [endpoint], |r| r.get(0)).ok();
+    let lead: Option<i64> = conn
+        .query_row("SELECT lead_min FROM push_subs WHERE endpoint=? AND user_id=?", params![endpoint, auth::uid()], |r| r.get(0))
+        .ok();
     ok(json!({ "subscribed": lead.is_some(), "lead_min": lead.unwrap_or(DEFAULT_LEAD_MIN) }))
 }
 
@@ -218,17 +234,32 @@ pub fn subscribe(body: &Value) -> ApiResult {
         return Err(err(422, "購読情報が不正です"));
     }
     let conn = db::connect();
+    // 別のユーザーが登録済みのエンドポイントは、鍵（その端末だけが持つ）が一致するときしか引き継げない
+    let owner: Option<(Option<i64>, String, String)> = conn
+        .query_row("SELECT user_id, p256dh, auth FROM push_subs WHERE endpoint=?", [&endpoint], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .ok();
+    if let Some((Some(u), k1, k2)) = owner {
+        if u != auth::uid() && (k1 != p256dh || k2 != auth) {
+            return Err(err(409, "この通知の購読は、別のユーザーが使っています"));
+        }
+    }
     conn.execute(
-        "INSERT INTO push_subs(endpoint,p256dh,auth,lead_min,created_at) VALUES(?,?,?,?,?) \
-         ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, lead_min=excluded.lead_min",
-        params![endpoint, p256dh, auth, lead, config::now_s()],
+        "INSERT INTO push_subs(endpoint,user_id,p256dh,auth,lead_min,created_at) VALUES(?,?,?,?,?,?) \
+         ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh, auth=excluded.auth, lead_min=excluded.lead_min",
+        params![endpoint, auth::uid(), p256dh, auth, lead, config::now_s()],
     )?;
     ok(json!({ "subscribed": true, "lead_min": lead }))
 }
 
 pub fn unsubscribe(body: &Value) -> ApiResult {
     let endpoint = endpoint_of(&body_obj(body))?;
-    drop_sub(&endpoint);
+    // 自分の購読だけ解除できる
+    let mine: Option<i64> = db::connect()
+        .query_row("SELECT 1 FROM push_subs WHERE endpoint=? AND user_id=?", params![endpoint, auth::uid()], |r| r.get(0))
+        .ok();
+    if mine.is_some() {
+        drop_sub(&endpoint);
+    }
     ok(json!({ "subscribed": false }))
 }
 
@@ -237,7 +268,7 @@ pub fn set_settings(body: &Value) -> ApiResult {
     let endpoint = endpoint_of(&m)?;
     let lead = lead_of(&m, None)?;
     let conn = db::connect();
-    let n = conn.execute("UPDATE push_subs SET lead_min=? WHERE endpoint=?", params![lead, endpoint])?;
+    let n = conn.execute("UPDATE push_subs SET lead_min=? WHERE endpoint=? AND user_id=?", params![lead, endpoint, auth::uid()])?;
     if n == 0 {
         return Err(err(404, "この端末は通知が有効になっていません"));
     }
@@ -248,7 +279,7 @@ pub fn test(body: &Value) -> ApiResult {
     let endpoint = endpoint_of(&body_obj(body))?;
     let sub = {
         let conn = db::connect();
-        conn.query_row("SELECT endpoint, p256dh, auth FROM push_subs WHERE endpoint=?", [&endpoint], |r| {
+        conn.query_row("SELECT endpoint, p256dh, auth FROM push_subs WHERE endpoint=? AND user_id=?", params![endpoint, auth::uid()], |r| {
             Ok(Sub { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? })
         })
         .map_err(|_| err(404, "この端末は通知が有効になっていません"))?
@@ -316,16 +347,16 @@ fn fmt_ep(r: &Ep, now: NaiveDateTime) -> Value {
 pub fn notify_due() -> usize {
     let now = config::now();
     let mut sent = 0;
-    let subs: Vec<(Sub, i64)> = {
+    let subs: Vec<(Sub, i64, i64)> = {
         let conn = db::connect();
         let _ = conn.execute("DELETE FROM push_sent WHERE start_at<?", [config::fmt_dt(now - Duration::days(2))]);
-        let mut st = conn.prepare("SELECT endpoint, p256dh, auth, lead_min FROM push_subs").unwrap();
-        st.query_map([], |r| Ok((Sub { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? }, r.get(3)?)))
+        let mut st = conn.prepare("SELECT endpoint, p256dh, auth, lead_min, user_id FROM push_subs WHERE user_id IS NOT NULL").unwrap();
+        st.query_map([], |r| Ok((Sub { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? }, r.get(3)?, r.get::<_, i64>(4)?)))
             .unwrap()
             .filter_map(|x| x.ok())
             .collect()
     };
-    for (sub, lead) in subs {
+    for (sub, lead, user) in subs {
         let lo = config::fmt_dt(now - Duration::minutes(GRACE_MIN));
         let hi = config::fmt_dt(now + Duration::minutes(lead));
         let rows: Vec<Ep> = {
@@ -337,13 +368,13 @@ pub fn notify_due() -> usize {
                        COALESCE(NULLIF(tr.platform,''), c.name, '') AS platform \
                      FROM episodes e JOIN tracks tr ON tr.id=e.track_id \
                      LEFT JOIN titles t ON t.tid=tr.tid LEFT JOIN channels c ON c.chid=tr.chid \
-                     WHERE e.hidden=0 AND e.watched=0 AND tr.archived=0 \
+                     WHERE e.hidden=0 AND e.watched=0 AND tr.archived=0 AND tr.user_id=? \
                        AND e.start_at IS NOT NULL AND e.start_at>=? AND e.start_at<=? \
                        AND NOT EXISTS (SELECT 1 FROM push_sent s WHERE s.endpoint=? AND s.ep_id=e.id AND s.start_at=e.start_at) \
                      ORDER BY e.start_at",
                 )
                 .unwrap();
-            st.query_map(params![lo, hi, sub.endpoint], |r| {
+            st.query_map(params![user, lo, hi, sub.endpoint], |r| {
                 Ok(Ep {
                     id: r.get(0)?,
                     number: r.get(1)?,
@@ -417,5 +448,31 @@ mod tests {
             "public_key": public_key(),
         });
         std::fs::write(std::env::var("PUSHTEST_OUT").unwrap(), out.to_string()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_host_parsing_rejects_ambiguous_urls() {
+        assert_eq!(host_of("https://fcm.googleapis.com/fcm/send/abc").as_deref(), Some("fcm.googleapis.com"));
+        assert!(check_endpoint("https://fcm.googleapis.com/fcm/send/abc").is_ok());
+        // URL パーサーによって、実際の接続先が evil.example と解釈されるもの
+        for bad in [
+            "https://evil.example\\@fcm.googleapis.com/x",
+            "https://evil.example#@fcm.googleapis.com/x",
+            "https://fcm.googleapis.com@evil.example/x",
+            "https://user:pw@fcm.googleapis.com/x",
+            "https://fcm.googleapis.com:8443/x",
+            "https://fcm.googleapis.com.evil.example/x",
+            "https://evilfcm.googleapis.com.evil.example/x",
+            "http://fcm.googleapis.com/x",
+            "https://fcm.googleapis.com /x",
+            "https://-fcm.googleapis.com/x",
+        ] {
+            assert!(check_endpoint(bad).is_err(), "通ってはいけない: {}", bad);
+        }
     }
 }

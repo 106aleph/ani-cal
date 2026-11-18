@@ -22,6 +22,13 @@ pub struct Config {
     pub sync_chunk_days: i64,
     pub sync_chgids: HashSet<i64>,
     pub sync_max_failures: i64,
+    pub range_sync_daily_limit: i64,
+    /// 受け付けるホスト名（Host ヘッダ）。空なら制限しない。127.0.0.1 / localhost は常に許可
+    pub allowed_hosts: Vec<String>,
+    /// 2段階認証を必須にする対象: "off" / "admin" / "all"
+    pub require_2fa: String,
+    /// Cookie に Secure を常に付ける（プロキシが X-Forwarded-Proto を付けない構成用）
+    pub cookie_secure: bool,
     pub skip_rebroadcast: bool,
     pub new_cats: HashSet<i64>,
     pub net_group_ids: HashSet<i64>,
@@ -88,6 +95,19 @@ pub fn get() -> &'static Config {
             sync_chunk_days: int("SYNC_CHUNK_DAYS", 2).max(1),
             sync_chgids: intset("SYNC_CHGIDS", ""),
             sync_max_failures: int("SYNC_MAX_FAILURES", 5),
+            range_sync_daily_limit: int("RANGE_SYNC_DAILY_LIMIT", 3),
+            allowed_hosts: env("ALLOWED_HOSTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|h| h.trim().to_lowercase())
+                .filter(|h| !h.is_empty())
+                .collect(),
+            require_2fa: match env("REQUIRE_2FA").unwrap_or_default().trim().to_lowercase().as_str() {
+                "off" | "false" | "0" | "no" => "off".to_string(),
+                "all" => "all".to_string(),
+                _ => "admin".to_string(), // 既定: 管理者は2段階認証が必須
+            },
+            cookie_secure: boolean("COOKIE_SECURE", false),
             skip_rebroadcast: boolean("SKIP_REBROADCAST", true),
             new_cats: intset("NEW_CATS", "1,10"),
             net_group_ids: intset("NET_GROUP_IDS", ""),

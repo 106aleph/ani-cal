@@ -1,6 +1,6 @@
 //! アニメ配信カレンダー API（Python 版 main.py と同じ入出力）
 use crate::util::*;
-use crate::{config, db, notify, sync};
+use crate::{auth, config, db, notify, sync};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone};
 use rusqlite::{named_params, params, params_from_iter, types::Value as SqlV, Connection};
 use serde_json::{json, Value};
@@ -103,9 +103,9 @@ fn with_season(mut d: Value) -> Value {
 
 fn get_track(conn: &Connection, id: i64) -> Result<Value, ApiErr> {
     let now = config::now_s();
-    let sql = format!("{} WHERE tr.id=:id", TRACK_SELECT);
+    let sql = format!("{} WHERE tr.id=:id AND tr.user_id=:uid", TRACK_SELECT);
     let mut st = conn.prepare(&sql)?;
-    let mut rows = st.query(named_params! {":now": now, ":id": id})?;
+    let mut rows = st.query(named_params! {":now": now, ":id": id, ":uid": auth::uid()})?;
     match rows.next()? {
         Some(r) => Ok(with_season(db::row_json(r))),
         None => Err(err(404, "作品が見つかりません")),
@@ -113,7 +113,12 @@ fn get_track(conn: &Connection, id: i64) -> Result<Value, ApiErr> {
 }
 
 fn get_episode(conn: &Connection, id: i64) -> Result<Value, ApiErr> {
-    db::query_one_json(conn, "SELECT * FROM episodes WHERE id=?", [id])?.ok_or_else(|| err(404, "エピソードが見つかりません"))
+    db::query_one_json(
+        conn,
+        "SELECT e.* FROM episodes e JOIN tracks tr ON tr.id=e.track_id WHERE e.id=? AND tr.user_id=?",
+        [id, auth::uid()],
+    )?
+    .ok_or_else(|| err(404, "エピソードが見つかりません"))
 }
 
 fn generate_episodes(
@@ -170,16 +175,30 @@ pub fn route(req: &Req) -> Option<ApiResult> {
     Some(match (m, segs.as_slice()) {
         ("GET", ["api", "health"]) => ok(json!({"ok": true})),
         ("GET", ["api", "status"]) => status(),
+        ("GET", ["api", "auth", "me"]) => auth::me(),
+        ("POST", ["api", "auth", "password"]) => auth::change_password(b),
+        ("POST", ["api", "auth", "ics_token"]) => auth::regenerate_ics_token(),
+        ("GET", ["api", "users"]) => auth::list_users(),
+        ("POST", ["api", "auth", "logout_others"]) => auth::logout_others(),
+        ("POST", ["api", "auth", "totp", "setup"]) => auth::totp_setup(b),
+        ("POST", ["api", "auth", "totp", "enable"]) => auth::totp_enable(b),
+        ("POST", ["api", "auth", "totp", "disable"]) => auth::totp_disable(b),
+        ("GET", ["api", "invites"]) => auth::list_invites(),
+        ("POST", ["api", "invites"]) => auth::create_invite(b),
+        ("DELETE", ["api", "invites", id]) => parse_id(id).and_then(auth::delete_invite),
+        ("PATCH", ["api", "users", id]) => parse_id(id).and_then(|i| auth::update_user(i, b)),
+        ("DELETE", ["api", "users", id]) => parse_id(id).and_then(auth::delete_user),
         ("POST", ["api", "sync"]) => trigger_sync(b),
         ("GET", ["api", "logs"]) => sync_logs(q),
         ("GET", ["api", "coverage"]) => coverage(),
-        ("POST", ["api", "sync", "cancel"]) => ok(json!({"cancelled": sync::cancel()})),
+        ("POST", ["api", "sync", "cancel"]) => auth::require_admin().and_then(|_| ok(json!({"cancelled": sync::cancel()}))),
         ("GET", ["api", "catalog"]) => catalog(),
         ("GET", ["api", "titles", tid, "channels"]) => title_channels(tid),
         ("GET", ["api", "tracks"]) => list_tracks(q),
         ("POST", ["api", "tracks"]) => create_track(b),
         ("POST", ["api", "tracks", id, "archive"]) => archive(id, true),
         ("POST", ["api", "tracks", id, "unarchive"]) => archive(id, false),
+        ("POST", ["api", "tracks", id, "drop"]) => drop_track(id),
         ("PATCH", ["api", "tracks", id]) => update_track(id, b),
         ("DELETE", ["api", "tracks", id]) => delete_track(id),
         ("POST", ["api", "tracks", id, "resync"]) => resync_track(id),
@@ -223,6 +242,7 @@ fn status() -> ApiResult {
 }
 
 fn trigger_sync(body: &Value) -> ApiResult {
+    auth::require_admin()?; // 取得は管理者のみ（しょぼいカレンダーへの負荷を管理するため）
     let m = body_obj(body);
     let (s, e) = (opt_str(&m, "start")?.filter(|x| !x.is_empty()), opt_str(&m, "end")?.filter(|x| !x.is_empty()));
     let (mut sd, mut ed) = (None, None);
@@ -237,6 +257,22 @@ fn trigger_sync(body: &Value) -> ApiResult {
         }
         if (b - a).num_days() > MAX_SYNC_DAYS {
             return Err(err(422, format!("期間は最大 {} 日までです", MAX_SYNC_DAYS)));
+        }
+        let limit = config::get().range_sync_daily_limit;
+        if limit > 0 {
+            let today = config::now().format("%Y-%m-%d").to_string();
+            let conn = db::connect();
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sync_log WHERE trigger='range' AND started_at >= ?",
+                [today],
+                |r| r.get(0),
+            )?;
+            if n >= limit {
+                return Err(err(429, format!(
+                    "期間指定は1日 {} 回までです（今日は {} 回実行済み）。制限を避けるため、明日以降に実行してください",
+                    limit, n
+                )));
+            }
         }
         sd = Some(a);
         ed = Some(b);
@@ -291,13 +327,13 @@ fn catalog() -> ApiResult {
         [mask],
     )?;
     // (tid, chid) → (track id, archived)
-    let mut tracked: HashMap<(i64, i64), (i64, bool)> = HashMap::new();
+    let mut tracked: HashMap<(i64, i64), (i64, i64)> = HashMap::new();
     {
-        let mut st = conn.prepare("SELECT id, tid, chid, archived FROM tracks WHERE tid IS NOT NULL")?;
-        let it = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?)))?;
+        let mut st = conn.prepare("SELECT id, tid, chid, archived FROM tracks WHERE tid IS NOT NULL AND user_id=?")?;
+        let it = st.query_map([auth::uid()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?)))?;
         for x in it.flatten() {
             if let Some(ch) = x.2 {
-                tracked.insert((x.1, ch), (x.0, x.3 != 0));
+                tracked.insert((x.1, ch), (x.0, x.3));
             }
         }
     }
@@ -317,7 +353,7 @@ fn catalog() -> ApiResult {
                 vec![],
             )
         });
-        let (trk, arch) = tracked.get(&(tid, chid)).map(|(i, a)| (json!(i), *a)).unwrap_or((Value::Null, false));
+        let (trk, arch) = tracked.get(&(tid, chid)).map(|(i, a)| (json!(i), *a)).unwrap_or((Value::Null, 0));
         let ep1 = r.get("ep1_start").cloned().unwrap_or(Value::Null);
         let first = if ep1.is_null() { r["first_start"].clone() } else { ep1.clone() };
         entry.1.push(json!({
@@ -330,7 +366,8 @@ fn catalog() -> ApiResult {
             "has_ep1": !ep1.is_null(),
             "count": r["n"],
             "track_id": trk,
-            "track_archived": arch,
+            "track_archived": arch != 0,
+            "track_state": arch,
         }));
     }
 
@@ -408,12 +445,14 @@ fn title_channels(tid: &str) -> ApiResult {
 
 // ---------------------------------------------------------------- 登録作品
 fn list_tracks(q: &HashMap<String, String>) -> ApiResult {
-    let archived = qbool(q, "archived")?;
+    // archived: 0=登録作品 / 1=視聴済み / 2=視聴中断
+    let state: i64 = if qbool(q, "dropped")? { 2 } else if qbool(q, "archived")? { 1 } else { 0 };
+    let archived = state != 0;
     let order = if archived { "tr.archived_at DESC, tr.id DESC" } else { "COALESCE(next_start, '9999'), tr.id DESC" };
     let conn = db::connect();
-    let sql = format!("{} WHERE tr.archived=:arch ORDER BY {}", TRACK_SELECT, order);
+    let sql = format!("{} WHERE tr.archived=:arch AND tr.user_id=:uid ORDER BY {}", TRACK_SELECT, order);
     let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(named_params! {":now": config::now_s(), ":arch": if archived { 1 } else { 0 }}, |r| Ok(db::row_json(r)))?;
+    let rows = st.query_map(named_params! {":now": config::now_s(), ":arch": state, ":uid": auth::uid()}, |r| Ok(db::row_json(r)))?;
     let v: Vec<Value> = rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().map(with_season).collect();
     ok(Value::Array(v))
 }
@@ -431,6 +470,16 @@ fn archive(id: &str, to_archive: bool) -> ApiResult {
         } else {
             conn.execute("UPDATE tracks SET archived=0, archived_at=NULL WHERE id=?", [id])?;
         }
+        ok(get_track(conn, id)?)
+    })
+}
+
+/// 視聴を中断した作品へ移す（話数に関係なくいつでも可）。戻すときは unarchive
+fn drop_track(id: &str) -> ApiResult {
+    let id = parse_id(id)?;
+    db::with_tx(|conn| {
+        get_track(conn, id)?;
+        conn.execute("UPDATE tracks SET archived=2, archived_at=? WHERE id=?", params![config::now_s(), id])?;
         ok(get_track(conn, id)?)
     })
 }
@@ -456,13 +505,13 @@ fn create_track(body: &Value) -> ApiResult {
     db::with_tx(|conn| {
         let new_id;
         if let (Some(tid), Some(chid)) = (tid, chid) {
-            let ex: Option<i64> = conn.query_row("SELECT id FROM tracks WHERE tid=? AND chid=?", params![tid, chid], |r| r.get(0)).ok();
+            let ex: Option<i64> = conn.query_row("SELECT id FROM tracks WHERE tid=? AND chid=? AND user_id=?", params![tid, chid, auth::uid()], |r| r.get(0)).ok();
             if let Some(ex) = ex {
                 return Err(err(409, format!("登録済みです (id={})", ex)));
             }
             conn.execute(
-                "INSERT INTO tracks(tid, chid, title, platform, created_at) VALUES (?,?,?,?,?)",
-                params![tid, chid, nz(&title), nz(&platform), now],
+                "INSERT INTO tracks(user_id, tid, chid, title, platform, created_at) VALUES (?,?,?,?,?,?)",
+                params![auth::uid(), tid, chid, nz(&title), nz(&platform), now],
             )?;
             new_id = conn.last_insert_rowid();
             sync::apply_track(conn, new_id)?;
@@ -473,8 +522,8 @@ fn create_track(body: &Value) -> ApiResult {
             }
             let plat = platform.clone().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
             conn.execute(
-                "INSERT INTO tracks(title, platform, auto_sync, created_at) VALUES (?,?,0,?)",
-                params![t.trim(), plat, now],
+                "INSERT INTO tracks(user_id, title, platform, auto_sync, created_at) VALUES (?,?,?,0,?)",
+                params![auth::uid(), t.trim(), plat, now],
             )?;
             new_id = conn.last_insert_rowid();
             if let Some(first) = norm_dt(first_start.clone())? {
@@ -523,7 +572,7 @@ fn update_track(id: &str, body: &Value) -> ApiResult {
                 return Err(err(400, "手動登録の作品は媒体(チャンネル)を変更できません。媒体名を編集してください"));
             };
             let dup: Option<i64> = conn
-                .query_row("SELECT 1 FROM tracks WHERE tid=? AND chid=? AND id<>?", params![tid, chid_in.unwrap(), id], |r| r.get(0))
+                .query_row("SELECT 1 FROM tracks WHERE tid=? AND chid=? AND id<>? AND user_id=?", params![tid, chid_in.unwrap(), id, auth::uid()], |r| r.get(0))
                 .ok();
             if dup.is_some() {
                 return Err(err(409, "その媒体は既に登録されています"));
@@ -767,7 +816,7 @@ JOIN tracks tr ON tr.id=e.track_id
 LEFT JOIN titles t ON t.tid=tr.tid
 LEFT JOIN channels c ON c.chid=tr.chid
 LEFT JOIN programs p ON p.pid=e.pid
-WHERE e.hidden=0 AND e.start_at IS NOT NULL AND tr.archived=0
+WHERE e.hidden=0 AND e.start_at IS NOT NULL AND tr.archived=0 AND tr.user_id=?
 ";
 
 fn calendar(q: &HashMap<String, String>) -> ApiResult {
@@ -781,7 +830,7 @@ fn calendar(q: &HashMap<String, String>) -> ApiResult {
     ok(Value::Array(db::query_json(
         &conn,
         &format!("{} AND e.start_at>=? AND e.start_at<? ORDER BY e.start_at", EP_CAL_SELECT),
-        params![s, e],
+        params![auth::uid(), s, e],
     )?))
 }
 
@@ -791,7 +840,7 @@ fn backlog() -> ApiResult {
     ok(Value::Array(db::query_json(
         &conn,
         &format!("{} AND e.watched=0 AND e.start_at<=? ORDER BY e.start_at", EP_CAL_SELECT),
-        [config::now_s()],
+        params![auth::uid(), config::now_s()],
     )?))
 }
 
@@ -819,7 +868,7 @@ pub fn ics(q: &HashMap<String, String>) -> Result<String, ApiErr> {
     let unwatched_only = qbool(q, "unwatched_only")?;
     let sql = format!("{}{} ORDER BY e.start_at", EP_CAL_SELECT, if unwatched_only { " AND e.watched=0" } else { "" });
     let conn = db::connect();
-    let rows = db::query_json(&conn, &sql, [])?;
+    let rows = db::query_json(&conn, &sql, [auth::uid()])?;
     let tz = config::get().tz;
     let utc = |s: &str| -> Option<String> {
         let n = NaiveDateTime::parse_from_str(s, config::DT_FMT).ok()?;

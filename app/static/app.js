@@ -18,6 +18,7 @@ async function api(path, { method = 'GET', body } = {}) {
     method, headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (r.status === 401 && !path.startsWith('/api/auth/login')) showLogin('ログインが必要です（期限切れの場合は、もう一度ログインしてください）');
   if (!r.ok) {
     let msg = r.statusText;
     try { const j = await r.json(); msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch { /* */ }
@@ -122,6 +123,269 @@ function formDialog({ title, fields = [], submit = '保存', extra = [], html = 
 }
 const confirmDialog = async (msg, ok = 'OK') =>
   (await formDialog({ title: msg, submit: ok })).action === 'ok';
+
+/* ============================================================ ログイン・アカウント */
+let loginMode = 'login';
+function setLoginMode(mode) {
+  loginMode = mode;
+  const reg = mode === 'register', setup = mode === 'setup', creating = reg || setup;
+  $$('.reg-only').forEach(el => { el.hidden = !creating; });
+  $('#login-code').closest('label').hidden = !reg; // 招待コードは、招待での登録のときだけ
+  $('#login-code').required = reg;
+  $('#login-pass2').required = creating;
+  $('#login-msg').textContent = setup ? 'はじめに、管理者のユーザー名とパスワードを決めてください。この最初のユーザーが管理者になります。パスワードは10文字以上です。'
+    : reg ? '管理者から受け取った招待コードで、ユーザーを登録します。パスワードは10文字以上です。' : 'ログインしてください。';
+  $('#login-submit').textContent = setup ? '管理者として登録' : reg ? '登録してログイン' : 'ログイン';
+  $('#login-toggle').hidden = setup;
+  $('#login-toggle').textContent = reg ? 'ログインに戻る' : '招待コードで新規登録';
+  $('#login-pass').autocomplete = creating ? 'new-password' : 'current-password';
+  $('#login-err').textContent = '';
+  $('#login-otp-row').hidden = true; $('#login-otp').required = false; $('#login-otp').value = '';
+}
+
+async function showLogin(msg) {
+  const dlg = $('#login-dlg');
+  if (!dlg.open) dlg.showModal();
+  // まだ誰も登録されていなければ、最初の管理者の登録画面にする
+  if (loginMode !== 'setup') {
+    try {
+      const s = await (await fetch('/api/auth/setup')).json();
+      if (s.needed) { setLoginMode('setup'); return; }
+    } catch { /* ログイン画面のままにする */ }
+  }
+  $('#login-err').textContent = msg || '';
+}
+
+function applyMe(me) {
+  state.me = me;
+  $('#account-btn').textContent = me.username;
+  $('#account-btn').title = `${me.username}（${me.admin ? '管理者' : '一般'}）のアカウント`;
+  $$('.admin-only').forEach(el => { el.hidden = !me.admin; });
+  const ics = $('a[href^="/calendar.ics"]');
+  if (ics) ics.href = `/calendar.ics?token=${encodeURIComponent(me.ics_token)}`;
+}
+
+async function doLogout() {
+  // この端末の通知は、ログアウトしたユーザーには送らない
+  try {
+    if (pushSupported()) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && await reg.pushManager.getSubscription();
+      if (sub) {
+        await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => { });
+        await sub.unsubscribe();
+      }
+    }
+  } catch { /* 通知の解除に失敗してもログアウトは続ける */ }
+  await api('/api/auth/logout', { method: 'POST' }).catch(() => { });
+  location.reload();
+}
+
+async function passwordDialog() {
+  const r = await formDialog({
+    title: 'パスワードの変更', submit: '変更',
+    html: '<p class="muted small">変更すると、ほかの端末のログインは解除されます。</p>',
+    fields: [
+      { name: 'current', label: '現在のパスワード', type: 'password', required: true },
+      { name: 'new', label: '新しいパスワード', type: 'password', required: true, help: '10文字以上。ユーザー名を含めず、よくある文字列は避ける' },
+      { name: 'new2', label: '新しいパスワード（確認）', type: 'password', required: true },
+    ],
+  });
+  if (r.action !== 'ok') return;
+  if (r.values.new !== r.values.new2) throw new Error('新しいパスワードが一致しません');
+  await api('/api/auth/password', { method: 'POST', body: { current: r.values.current, new: r.values.new } });
+  toast('パスワードを変更しました');
+}
+
+async function totpDialog() {
+  if (state.me.totp_enabled) {
+    const r = await formDialog({
+      title: '2段階認証', submit: 'オフにする',
+      html: '<p class="muted small">2段階認証は<strong>オン</strong>です。オフにするには、パスワードと、認証アプリの6桁のコード（またはリカバリーコード）が必要です。</p>',
+      fields: [
+        { name: 'password', label: 'パスワード', type: 'password', required: true },
+        { name: 'code', label: '認証コード', required: true },
+      ],
+    });
+    if (r.action !== 'ok') return;
+    await api('/api/auth/totp/disable', { method: 'POST', body: r.values });
+    applyMe(await api('/api/auth/me'));
+    toast('2段階認証をオフにしました');
+    return;
+  }
+  const pw = await formDialog({
+    title: '2段階認証の設定', submit: '次へ',
+    html: '<p class="muted small">本人確認のため、パスワードを入力してください。</p>',
+    fields: [{ name: 'password', label: 'パスワード', type: 'password', required: true }],
+  });
+  if (pw.action !== 'ok') return;
+  const s = await api('/api/auth/totp/setup', { method: 'POST', body: pw.values });
+  const r = await formDialog({
+    title: '2段階認証の設定', submit: '有効にする',
+    html: `<p class="muted small">Authy・Google Authenticator・1Password などの認証アプリで、QRコードを読み取るか、下のキーを手入力して登録し、表示された6桁のコードを入力してください。</p>
+      <div class="qr">${s.qr_svg}</div>
+      <input class="copyurl" readonly value="${esc(s.secret)}" aria-label="セットアップキー">`,
+    fields: [{ name: 'code', label: 'アプリに表示された6桁のコード', required: true }],
+    setup: dlg => {
+      $('.copyurl', dlg).addEventListener('focus', ev => ev.target.select());
+      const f = $('input[name=code]', dlg);
+      if (f) { f.inputMode = 'numeric'; f.autocomplete = 'one-time-code'; }
+    },
+  });
+  if (r.action !== 'ok') return;
+  const { recovery_codes: codes } = await api('/api/auth/totp/enable', { method: 'POST', body: r.values });
+  applyMe(await api('/api/auth/me'));
+  await formDialog({
+    title: 'リカバリーコード', submit: '保存しました',
+    html: `<p class="muted small">認証アプリを使えなくなったときのための、1回限りのコードです。<strong>この画面は二度と表示されません。</strong>パスワードマネージャーなどに保存してください。</p>
+      <pre class="reccodes">${codes.map(esc).join('\n')}</pre>`,
+  });
+}
+
+async function icsDialog() {
+  const url = `${location.origin}/calendar.ics?token=${encodeURIComponent(state.me.ics_token)}`;
+  const r = await formDialog({
+    title: 'カレンダー購読URL', submit: '閉じる',
+    html: `<p class="muted small">Googleカレンダーなどで購読できる、あなた専用のURLです。URLを知っている人は予定を見られるので、人に教えないでください（<code>&amp;unwatched_only=true</code> を付けると未視聴のみ）。</p>
+      <input class="copyurl" readonly value="${esc(url)}" aria-label="購読URL">`,
+    extra: [{ label: 'URLを作り直す', value: 'regen', cls: 'danger' }],
+    setup: dlg => $('.copyurl', dlg).addEventListener('focus', ev => ev.target.select()),
+  });
+  if (r.action !== 'regen') return;
+  if (!await confirmDialog('URLを作り直しますか？今の購読URLは使えなくなります。', '作り直す')) return;
+  applyMe(await api('/api/auth/ics_token', { method: 'POST' }));
+  toast('購読URLを作り直しました');
+  await icsDialog();
+}
+
+async function usersDialog() {
+  for (;;) {
+    const r = await formDialog({
+      title: 'ユーザー管理', submit: '閉じる',
+      html: `<p class="muted small">新しいユーザーは、招待コードを発行して本人に渡し、ログイン画面の「招待コードで新規登録」から登録してもらいます（コードは1回だけ使え、7日で期限切れ）。</p>
+        <div class="ulist inv"></div><div class="ulist"></div>`,
+      extra: [{ label: '招待コードを発行', value: 'add', cls: 'primary' }],
+      setup: dlg => {
+        const box = $$('.ulist', dlg)[1], ibox = $('.inv', dlg);
+        const render = async () => {
+          const [us, invs] = await Promise.all([api('/api/users'), api('/api/invites')]);
+          ibox.hidden = !invs.length;
+          ibox.innerHTML = invs.map(i => `<div class="urow" data-inv="${i.id}">
+            <div class="un"><input class="copyurl" readonly value="${esc(i.code.replace(/(.{4})(?=.)/g, '$1-'))}" aria-label="招待コード">
+              <div class="muted small">${i.role === 'admin' ? '管理者' : '一般'}として登録・${esc(i.expires_at.replace('T', ' '))} まで</div></div>
+            <button type="button" class="danger" data-delinv>取り消す</button></div>`).join('');
+          box.innerHTML = us.map(u => `<div class="urow" data-id="${u.id}" data-name="${esc(u.username)}">
+            <div class="un"><strong>${esc(u.username)}</strong>${u.id === state.me.id ? ' <span class="badge">自分</span>' : ''}
+              <div class="muted small">登録作品 ${u.tracks} 件${u.totp_enabled ? '・2段階認証オン' : ''}</div></div>
+            <select data-role aria-label="権限">
+              <option value="user" ${u.role === 'user' ? 'selected' : ''}>一般</option>
+              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者</option></select>
+            <button type="button" data-pw>パスワード再設定</button>
+            ${u.totp_enabled ? '<button type="button" data-totp>2段階認証を解除</button>' : ''}
+            <button type="button" class="danger" data-del ${u.id === state.me.id ? 'disabled' : ''}>削除</button></div>`).join('');
+        };
+        render().catch(e => toast(e.message, true));
+        const act = fn => async ev => { try { await fn(ev); } catch (e) { toast(e.message, true); } await render().catch(() => { }); };
+        box.addEventListener('change', act(async ev => {
+          const row = ev.target.closest('.urow');
+          if (ev.target.matches('[data-role]')) {
+            await api(`/api/users/${row.dataset.id}`, { method: 'PATCH', body: { role: ev.target.value } });
+            if (Number(row.dataset.id) === state.me.id) location.reload();
+            toast('権限を変更しました');
+          }
+        }));
+        ibox.addEventListener('focusin', ev => ev.target.select?.());
+        ibox.addEventListener('click', act(async ev => {
+          const row = ev.target.closest('.urow');
+          if (row && ev.target.matches('[data-delinv]')) {
+            await api(`/api/invites/${row.dataset.inv}`, { method: 'DELETE' });
+            toast('招待コードを取り消しました');
+          }
+        }));
+        box.addEventListener('click', act(async ev => {
+          const row = ev.target.closest('.urow');
+          if (!row) return;
+          const id = row.dataset.id, name = row.dataset.name;
+          if (ev.target.matches('[data-pw]')) {
+            const p = await formDialog({
+              title: `「${name}」のパスワード再設定`, submit: '再設定',
+              html: '<p class="muted small">そのユーザーのログインは解除されます。</p>',
+              fields: [{ name: 'password', label: '新しいパスワード', type: 'password', required: true, help: '10文字以上。ユーザー名を含めず、よくある文字列は避ける' }],
+            });
+            if (p.action !== 'ok') return;
+            await api(`/api/users/${id}`, { method: 'PATCH', body: { password: p.values.password } });
+            toast('パスワードを再設定しました');
+          } else if (ev.target.matches('[data-totp]')) {
+            if (!await confirmDialog(`「${name}」の2段階認証を解除しますか？認証アプリを失くした人向けです。本人のログインは解除されます。`, '解除')) return;
+            await api(`/api/users/${id}`, { method: 'PATCH', body: { reset_totp: true } });
+            toast('2段階認証を解除しました');
+          } else if (ev.target.matches('[data-del]')) {
+            if (!await confirmDialog(`「${name}」を削除しますか？登録作品と視聴記録も削除されます。`, '削除')) return;
+            await api(`/api/users/${id}`, { method: 'DELETE' });
+            toast('ユーザーを削除しました');
+          }
+        }));
+      },
+    });
+    if (r.action !== 'add') return;
+    const a = await formDialog({
+      title: '招待コードを発行', submit: '発行',
+      fields: [
+        { name: 'role', label: '登録するユーザーの権限', type: 'select', value: 'user', options: [{ value: 'user', label: '一般' }, { value: 'admin', label: '管理者' }] },
+      ],
+    });
+    if (a.action !== 'ok') continue;
+    try {
+      await api('/api/invites', { method: 'POST', body: a.values });
+      toast('招待コードを発行しました');
+    } catch (e) { toast(e.message, true); }
+  }
+}
+
+async function accountDialog() {
+  const me = state.me;
+  const acts = [...(me.admin ? [['users', 'ユーザー管理']] : []), ['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['others', '他の端末をすべてログアウト']];
+  const r = await formDialog({
+    title: 'アカウント', submit: '閉じる',
+    html: `<p><strong>${esc(me.username)}</strong> <span class="badge">${me.admin ? '管理者' : '一般'}</span></p>
+      <div class="acct-actions">${acts.map(([k, l]) => `<button type="button" data-do="${k}">${l}</button>`).join('')}
+        <button type="button" class="danger" data-do="logout">ログアウト</button></div>`,
+    setup: dlg => dlg.addEventListener('click', ev => { const b = ev.target.closest('[data-do]'); if (b) dlg.close(b.dataset.do); }),
+  });
+  if (r.action === 'users') await usersDialog();
+  else if (r.action === 'password') await passwordDialog();
+  else if (r.action === 'totp') await totpDialog();
+  else if (r.action === 'ics') await icsDialog();
+  else if (r.action === 'others') {
+    if (!await confirmDialog('この端末以外のログインを、すべて解除しますか？', '解除する')) return;
+    const x = await api('/api/auth/logout_others', { method: 'POST' });
+    toast(x.count ? `${x.count} 件のログインを解除しました` : 'ほかにログイン中の端末はありません');
+  } else if (r.action === 'logout') await doLogout();
+}
+
+/* 2段階認証が必須の設定（REQUIRE_2FA）なのに、まだ有効にしていないとき: 設定するまで先へ進ませない */
+async function forceTotp() {
+  while (!state.me.totp_enabled) {
+    const r = await formDialog({
+      title: '2段階認証の設定が必要です', submit: '設定する',
+      html: '<p class="muted small">このサーバーでは、あなたのアカウントに2段階認証が必須です。Authy などの認証アプリを用意して、設定してください。設定するまで、ほかの操作はできません。</p>',
+      extra: [{ label: 'ログアウト', value: 'logout', cls: 'danger' }],
+    });
+    if (r.action === 'logout') { await doLogout(); return; }
+    if (r.action === 'ok') await guard(totpDialog)();
+  }
+  location.reload();
+}
+
+async function boot() {
+  let me;
+  try { me = await api('/api/auth/me'); } catch { return; } // 未ログインなら、api() がログイン画面を出す
+  applyMe(me);
+  if (me.needs_2fa) { await forceTotp(); return; }
+  renderTab().catch(e => toast(e.message, true));
+  refreshStatus().catch(() => { });
+  setInterval(() => refreshStatus().catch(() => { }), 60000);
+}
 
 /* ============================================================ 通知（Web Push） */
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -433,11 +697,12 @@ async function loadCatalog(force = false) {
   if (!state.catalog || force) state.catalog = await api('/api/catalog');
   const c = state.catalog;
   const ss = $('#cat-season');
-  const prevS = ss.value || store.get('catSeason', String(c.current_season_key));
+  // 初回だけ保存値を使い、以降は現在の選択（「すべての時期」＝空も含む）を維持する
+  const prevS = ss.options.length ? ss.value : store.get('catSeason', String(c.current_season_key));
   ss.innerHTML = '<option value="">すべての時期</option>' + c.seasons.map(s => `<option value="${s.key}">${esc(s.label)}</option>`).join('');
-  ss.value = c.seasons.some(s => String(s.key) === prevS) ? prevS : (c.seasons[0] ? String(c.seasons[0].key) : '');
+  ss.value = prevS === '' || c.seasons.some(s => String(s.key) === prevS) ? prevS : (c.seasons[0] ? String(c.seasons[0].key) : '');
   const ps = $('#cat-platform');
-  const prevP = ps.value || store.get('catPlatform', '');
+  const prevP = ps.options.length > 1 ? ps.value : store.get('catPlatform', '');
   ps.innerHTML = '<option value="">すべての媒体</option>' + c.platforms.map(p =>
     `<option value="${esc(p.name)}">${p.is_net ? '🌐 ' : ''}${esc(p.name)}（${p.titles}）</option>`).join('');
   ps.value = c.platforms.some(p => p.name === prevP) ? prevP : '';
@@ -466,8 +731,8 @@ function renderCatalog() {
     return `<div class="work">
       <div class="wt"><strong>${esc(it.title)}</strong> <span class="muted small">${esc(it.season || '')}</span></div>
       <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${plat && ch.name === plat ? 'hl' : ''}"
-          data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}" data-archived="${ch.track_archived ? 1 : 0}"
-          title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}${ch.track_archived ? '（視聴済み）' : ''}">
+          data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}" data-state="${ch.track_state || 0}"
+          title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}${ch.track_state === 2 ? '（視聴中断）' : ch.track_archived ? '（視聴済み）' : ''}">
           ${ch.track_id ? '✓ ' : ''}${esc(ch.name)} <span class="when">${esc(fmtFull(ch.first_start))}${ch.has_ep1 ? '〜' : '頃〜'}</span></button>`).join('')
         || '<span class="muted small">（条件に合う媒体なし）</span>'}</div></div>`;
   }).join('');
@@ -475,18 +740,24 @@ function renderCatalog() {
 
 /* ============================================================ tracks */
 const allWatched = t => t.ep_total > 0 && t.ep_watched === t.ep_total;
-const trackMeta = t => t.archived
+const trackMeta = t => t.archived === 2
+  ? `<span class="muted small">${t.ep_watched}/${t.ep_total} 視聴で中断 ・ ${esc((t.archived_at || '').slice(0, 10))} に移動</span>`
+  : t.archived
   ? `<span class="muted small">全${t.ep_total}話 視聴済み ・ ${esc((t.archived_at || '').slice(0, 10))} に移動</span>`
   : `${t.ep_watched}/${t.ep_total} 視聴
           ${t.backlog ? `<span class="badge backlog">未視聴 ${t.backlog}</span>` : ''}
           <span class="muted small">次回 ${esc(fmtFull(t.next_start))}</span>`;
 const archiveBtnTitle = t => allWatched(t) ? '全話視聴済みの作品を「視聴済み」へ移します' : '全話を視聴済みにすると押せます';
 
+// kind: 0=登録作品 / 1=視聴済み / 2=視聴中断
+const tracksUrl = kind => kind === 2 ? '/api/tracks?dropped=true' : `/api/tracks?archived=${kind === 1}`;
+const TRACK_ROOT = ['#track-list', '#archive-list', '#dropped-list'];
+
 /* 一覧全体を作り直さず、指定作品の件数表示とエピソード表だけ更新する（開閉状態・スクロールを保つ） */
 async function refreshTrack(id) {
   const det = $(`details.track[data-id="${id}"]`);
-  const tl = det.closest('.track-root'), archived = tl.dataset.archived === '1';
-  const tracks = await api(`/api/tracks?archived=${archived}`);
+  const tl = det.closest('.track-root');
+  const tracks = await api(tracksUrl(Number(tl.dataset.archived)));
   tl._tracks = tracks;
   const t = tracks.find(x => x.id === id);
   if (t) {
@@ -497,17 +768,20 @@ async function refreshTrack(id) {
   await loadEpisodes(id);
 }
 
-async function renderTracks(archived = false) {
-  const root = $(archived ? '#archive-list' : '#track-list');
-  const tracks = await api(`/api/tracks?archived=${archived}`);
+async function renderTracks(kind = 0) {
+  const archived = kind !== 0;
+  const root = $(TRACK_ROOT[kind]);
+  const tracks = await api(tracksUrl(kind));
   root._tracks = tracks;
   if (!tracks.length) {
-    root.innerHTML = archived
+    root.innerHTML = kind === 2
+      ? '<p class="empty">視聴を中断した作品はありません。「登録作品」で「視聴を中断」を押すと、ここに表示されます。</p>'
+      : archived
       ? '<p class="empty">視聴済みの作品はまだありません。「登録作品」で全話を視聴済みにして「視聴済みに移す」を押すと、ここに表示されます。</p>'
       : '<p class="empty">登録作品はまだありません。「作品一覧」で媒体を選んで登録してください。</p>';
     return;
   }
-  // 視聴済みタブは、放送クールの新しい順 → 名前順に並べ、クールの境目に見出しを出す
+  // 視聴済み・視聴中断タブは、放送クールの新しい順 → 名前順に並べ、クールの境目に見出しを出す
   const shown = !archived ? tracks : tracks.slice().sort((a, b) =>
     (b.season_key ?? -1) - (a.season_key ?? -1) || a.display_title.localeCompare(b.display_title, 'ja'));
   let prevSeason;
@@ -537,7 +811,8 @@ async function renderTracks(archived = false) {
           <button data-act="gen" title="最後の話の日時から一定間隔で残りの話を作成">間隔で話を作成</button>
           <button data-act="watchall">配信済みを全て視聴済みに</button>
           ${t.tid ? '<button data-act="resync">取得データを再反映</button>' : ''}
-          <button data-act="archive" class="primary" ${allWatched(t) ? '' : 'disabled'} title="${archiveBtnTitle(t)}">視聴済みに移す</button>`}
+          <button data-act="archive" class="primary" ${allWatched(t) ? '' : 'disabled'} title="${archiveBtnTitle(t)}">視聴済みに移す</button>
+          <button data-act="drop" title="途中で見るのをやめた作品を「視聴中断」へ移します（カレンダー・通知から外れます）">視聴を中断</button>`}
           <span class="spacer"></span>
           <button data-act="del" class="danger">登録解除</button>
         </div>
@@ -627,6 +902,10 @@ async function trackAction(t, act) {
     await api(`/api/tracks/${t.id}/archive`, { method: 'POST' });
     state.catalog = null;
     toast(`「${t.display_title}」を視聴済みに移しました`);
+  } else if (act === 'drop') {
+    await api(`/api/tracks/${t.id}/drop`, { method: 'POST' });
+    state.catalog = null;
+    toast(`「${t.display_title}」を視聴中断に移しました`);
   } else if (act === 'unarchive') {
     await api(`/api/tracks/${t.id}/unarchive`, { method: 'POST' });
     toast(`「${t.display_title}」を登録作品に戻しました`);
@@ -739,8 +1018,9 @@ async function renderTab() {
   if (state.tab === 'calendar') await renderCalendar();
   else if (state.tab === 'catalog') await loadCatalog();
   else if (state.tab === 'logs') await renderLogs();
-  else if (state.tab === 'archive') await renderTracks(true);
-  else await renderTracks(false);
+  else if (state.tab === 'archive') await renderTracks(1);
+  else if (state.tab === 'dropped') await renderTracks(2);
+  else await renderTracks(0);
 }
 
 function init() {
@@ -790,7 +1070,7 @@ function init() {
     if (!b) return;
     if (b.dataset.track) {
       state.openTracks.add(Number(b.dataset.track)); store.set('openTracks', [...state.openTracks]);
-      state.tab = b.dataset.archived === '1' ? 'archive' : 'tracks'; store.set('tab', state.tab); await renderTab();
+      state.tab = ['tracks', 'archive', 'dropped'][Number(b.dataset.state || 0)]; store.set('tab', state.tab); await renderTab();
       $(`details.track[data-id="${b.dataset.track}"]`)?.scrollIntoView({ block: 'start' });
       return;
     }
@@ -802,7 +1082,7 @@ function init() {
   }));
 
   const bindTrackRoot = tl => {
-    const archived = tl.dataset.archived === '1';
+    const kind = Number(tl.dataset.archived);
     tl.addEventListener('toggle', ev => {
       const d = ev.target;
       if (!d.matches?.('details.track')) return;
@@ -828,7 +1108,7 @@ function init() {
         return;
       }
       const act = ev.target.closest('button[data-act]')?.dataset.act;
-      if (act && await trackAction(t, act)) await renderTracks(archived);
+      if (act && await trackAction(t, act)) await renderTracks(kind);
     }));
   };
   $$('.track-root').forEach(bindTrackRoot);
@@ -876,9 +1156,39 @@ function init() {
   }));
 
   $('#notify-btn').addEventListener('click', guard(notifySettings));
+  $('#account-btn').addEventListener('click', guard(accountDialog));
+  $('#login-dlg').addEventListener('cancel', ev => ev.preventDefault()); // ログインするまで閉じさせない
+  $('#login-toggle').addEventListener('click', () => setLoginMode(loginMode === 'login' ? 'register' : 'login'));
+  $('#login-form').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const btn = $('#login-submit');
+    btn.disabled = true;
+    try {
+      const reg = loginMode === 'register', setup = loginMode === 'setup';
+      if ((reg || setup) && $('#login-pass').value !== $('#login-pass2').value) throw new Error('パスワード（確認）が一致しません');
+      const r = await api(setup ? '/api/auth/setup' : reg ? '/api/auth/register' : '/api/auth/login', {
+        method: 'POST',
+        body: {
+          username: $('#login-user').value.trim(), password: $('#login-pass').value,
+          ...(reg ? { code: $('#login-code').value } : {}),
+          ...(!reg && !setup && !$('#login-otp-row').hidden ? { otp: $('#login-otp').value } : {}),
+        },
+      });
+      if (r && r.totp_required) { // 2段階認証: 認証アプリのコードを入力してもらう
+        $('#login-otp-row').hidden = false;
+        $('#login-otp').required = true;
+        $('#login-otp').focus();
+        $('#login-err').textContent = '認証アプリの6桁のコード（または、リカバリーコード）を入力してください。';
+        btn.disabled = false;
+        return;
+      }
+      location.reload();
+    } catch (e) {
+      $('#login-err').textContent = e.message;
+      btn.disabled = false;
+    }
+  });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { });
-  renderTab().catch(e => toast(e.message, true));
-  refreshStatus().catch(() => { });
-  setInterval(() => refreshStatus().catch(() => { }), 60000);
+  boot();
 }
 init();

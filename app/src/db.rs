@@ -83,6 +83,17 @@ pub fn init() {
         conn.execute_batch("ALTER TABLE users ADD COLUMN last_login_at TEXT").ok();
         conn.execute_batch("UPDATE users SET last_login_at=(SELECT MAX(created_at) FROM sessions WHERE sessions.user_id=users.id)").ok();
     }
+    // ログイン中の端末の一覧用（旧バージョンのセッションには、端末の情報がない）
+    let scols = cols("sessions");
+    for (c, ddl) in [
+        ("user_agent", "ALTER TABLE sessions ADD COLUMN user_agent TEXT"),
+        ("ip", "ALTER TABLE sessions ADD COLUMN ip TEXT"),
+        ("last_used_at", "ALTER TABLE sessions ADD COLUMN last_used_at TEXT"),
+    ] {
+        if !scols.iter().any(|x| x == c) {
+            conn.execute_batch(ddl).ok();
+        }
+    }
     conn.execute_batch(
         "DROP INDEX IF EXISTS uq_tracks_tid_chid;
          CREATE UNIQUE INDEX IF NOT EXISTS uq_tracks_user_tid_chid

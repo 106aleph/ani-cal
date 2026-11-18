@@ -75,7 +75,10 @@ CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  user_agent TEXT,                      -- ログインした端末（ブラウザ）の User-Agent
+  ip TEXT,                              -- ログインしたときの接続元
+  last_used_at TEXT                     -- 最後に使われた日時（10分より細かくは更新しない）
 );
 
 -- ユーザーが登録した作品（媒体選択済み）。ユーザーごとに持つ。

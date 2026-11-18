@@ -348,7 +348,7 @@ async function renderAdmin() {
 
 async function accountDialog() {
   const me = state.me;
-  const acts = [['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['others', '他の端末をすべてログアウト']];
+  const acts = [['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['sessions', 'ログイン中の端末']];
   const r = await formDialog({
     title: 'アカウント', submit: '閉じる',
     html: `<p><strong>${esc(me.username)}</strong> <span class="badge">${me.admin ? '管理者' : '一般'}</span></p>
@@ -359,11 +359,47 @@ async function accountDialog() {
   if (r.action === 'password') await passwordDialog();
   else if (r.action === 'totp') await totpDialog();
   else if (r.action === 'ics') await icsDialog();
-  else if (r.action === 'others') {
-    if (!await confirmDialog('この端末以外のログインを、すべて解除しますか？', '解除する')) return;
-    const x = await api('/api/auth/logout_others', { method: 'POST' });
-    toast(x.count ? `${x.count} 件のログインを解除しました` : 'ほかにログイン中の端末はありません');
-  } else if (r.action === 'logout') await doLogout();
+  else if (r.action === 'sessions') await sessionsDialog();
+  else if (r.action === 'logout') await doLogout();
+}
+
+/* User-Agent から、「Chrome / macOS」のような表示名を作る */
+function deviceName(ua) {
+  if (!ua) return '不明な端末';
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows'
+    : /CrOS/.test(ua) ? 'ChromeOS' : /Macintosh|Mac OS X/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : '';
+  const br = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox\/|FxiOS/.test(ua) ? 'Firefox'
+    : /Chrome\/|CriOS/.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+  return [br, os].filter(Boolean).join(' / ') || 'ブラウザ';
+}
+
+/* ログイン中の端末の一覧。心当たりのない端末を、1つずつ、またはまとめてログアウトできる */
+async function sessionsDialog() {
+  for (;;) {
+    const list = await api('/api/auth/sessions');
+    const t = s => (s || '—').replace('T', ' ');
+    const r = await formDialog({
+      title: 'ログイン中の端末', submit: '閉じる',
+      html: `<p class="muted small">このアカウントでログインしている端末です。心当たりのない端末は、「ログアウト」で解除してください。</p>
+        <div class="ulist">${list.map(s => `<div class="urow">
+          <div class="un"><strong>${esc(deviceName(s.user_agent))}</strong>${s.current ? ' <span class="badge">この端末</span>' : ''}
+            <div class="muted small">最終利用 ${esc(t(s.last_used_at))}・ログイン ${esc(t(s.created_at))}</div>
+            <div class="muted small" title="${esc(s.user_agent || '')}">接続元 ${esc(s.ip || '不明')}</div></div>
+          ${s.current ? '' : `<button type="button" class="danger" data-revoke="${esc(s.id)}">ログアウト</button>`}</div>`).join('')}</div>`,
+      extra: list.length > 1 ? [{ label: '他の端末をすべてログアウト', value: 'others', cls: 'danger' }] : [],
+      setup: dlg => dlg.addEventListener('click', ev => { const b = ev.target.closest('[data-revoke]'); if (b) dlg.close('revoke:' + b.dataset.revoke); }),
+    });
+    try {
+      if (r.action.startsWith('revoke:')) {
+        await api(`/api/auth/sessions/${r.action.slice(7)}`, { method: 'DELETE' });
+        toast('ログアウトさせました');
+      } else if (r.action === 'others') {
+        if (!await confirmDialog('この端末以外のログインを、すべて解除しますか？', '解除する')) continue;
+        const x = await api('/api/auth/logout_others', { method: 'POST' });
+        toast(`${x.count} 件のログインを解除しました`);
+      } else return;
+    } catch (e) { toast(e.message, true); }
+  }
 }
 
 /* 2段階認証が必須の設定（REQUIRE_2FA）なのに、まだ有効にしていないとき: 設定するまで先へ進ませない */

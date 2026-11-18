@@ -295,6 +295,8 @@ fn handle(mut rq: Request) {
         return respond_json(rq, 404, &json!({"detail": "Not Found"}));
     }
     let secure = is_https(&rq);
+    // ログインしたときに、セッションへ記録する (接続元と User-Agent)
+    auth::set_meta(&client_id(&rq), &req_header(&rq, "User-Agent").unwrap_or_default());
     // 認証が要らないのは、稼働確認とログインだけ
     if method == "GET" && path == "/api/health" {
         return respond_json(rq, 200, &json!({"ok": true}));

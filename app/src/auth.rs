@@ -40,10 +40,16 @@ pub struct Cur {
 
 thread_local! {
     static CUR: RefCell<Option<Cur>> = const { RefCell::new(None) };
+    /// このリクエストの接続元と User-Agent（ログインしたときに、セッションに記録する）
+    static META: RefCell<(String, String)> = const { RefCell::new((String::new(), String::new())) };
 }
 
 pub fn set_current(c: Option<Cur>) {
     CUR.with(|x| *x.borrow_mut() = c);
+}
+
+pub fn set_meta(ip: &str, user_agent: &str) {
+    META.with(|m| *m.borrow_mut() = (ip.chars().take(64).collect(), user_agent.chars().take(200).collect()));
 }
 
 fn cur() -> Cur {
@@ -225,11 +231,11 @@ pub fn from_session(token: &str) -> Option<Cur> {
     let h = sha256_hex(token);
     let conn = db::connect();
     let now = config::now();
-    let (uid, role, exp, created): (i64, String, String, String) = conn
+    let (uid, role, exp, created, used): (i64, String, String, String, Option<String>) = conn
         .query_row(
-            "SELECT u.id, u.role, s.expires_at, s.created_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?",
+            "SELECT u.id, u.role, s.expires_at, s.created_at, s.last_used_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?",
             [&h],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .ok()?;
     let exp_t = chrono::NaiveDateTime::parse_from_str(&exp, config::DT_FMT).ok()?;
@@ -242,6 +248,14 @@ pub fn from_session(token: &str) -> Option<Cur> {
     if exp_t - now < Duration::days(SESSION_DAYS / 2) {
         let ext = (now + Duration::days(SESSION_DAYS)).min(hard_limit);
         let _ = conn.execute("UPDATE sessions SET expires_at=? WHERE token_hash=?", params![config::fmt_dt(ext), h]);
+    }
+    // 最後に使われた日時（要求のたびに書き込まないよう、10分以上空いたときだけ更新する）
+    let stale = used
+        .as_deref()
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, config::DT_FMT).ok())
+        .is_none_or(|t| now - t >= Duration::minutes(10));
+    if stale {
+        let _ = conn.execute("UPDATE sessions SET last_used_at=? WHERE token_hash=?", params![config::fmt_dt(now), h]);
     }
     Some(Cur { uid, admin: role == "admin", session: Some(h) })
 }
@@ -261,9 +275,10 @@ fn create_session(conn: &Connection, uid: i64) -> String {
     let token = random_token();
     let now = config::now();
     let _ = conn.execute("DELETE FROM sessions WHERE expires_at<?", [config::fmt_dt(now)]);
+    let (ip, ua) = META.with(|m| m.borrow().clone());
     let _ = conn.execute(
-        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-        params![sha256_hex(&token), uid, config::fmt_dt(now), config::fmt_dt(now + Duration::days(SESSION_DAYS))],
+        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at, user_agent, ip, last_used_at) VALUES (?,?,?,?,?,?,?)",
+        params![sha256_hex(&token), uid, config::fmt_dt(now), config::fmt_dt(now + Duration::days(SESSION_DAYS)), ua, ip, config::fmt_dt(now)],
     );
     // ログイン・登録・最初の管理者の登録のいずれも、ここでセッションを作る
     let _ = conn.execute("UPDATE users SET last_login_at=? WHERE id=?", params![config::fmt_dt(now), uid]);
@@ -487,6 +502,41 @@ fn verify_current_password(uid: i64, given: &str, hash: &str, msg: &str) -> Resu
     }
     clear_fails(&key);
     Ok(())
+}
+
+/// ログイン中の端末の一覧（自分のセッションだけ。新しく使われた順）。
+/// id は、セッションのトークンのハッシュの先頭16文字（トークン本体は復元できない）
+pub fn list_sessions() -> ApiResult {
+    let c = cur();
+    let conn = db::connect();
+    let mine = c.session.as_deref().unwrap_or_default();
+    let rows = db::query_json(
+        &conn,
+        "SELECT substr(token_hash,1,16) AS id, token_hash=? AS current, created_at, last_used_at, ip, user_agent
+         FROM sessions WHERE user_id=? AND expires_at>=? ORDER BY COALESCE(last_used_at, created_at) DESC",
+        params![mine, c.uid, config::now_s()],
+    )?;
+    ok(Value::Array(rows))
+}
+
+/// 端末を1つだけログアウトさせる。今の端末は、ログアウトで解除する
+pub fn revoke_session(id: &str) -> ApiResult {
+    let c = cur();
+    if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(err(422, "id が不正です"));
+    }
+    let id = id.to_lowercase();
+    if c.session.as_deref().is_some_and(|s| s.starts_with(&id)) {
+        return Err(err(400, "この端末は、ログアウトで解除してください"));
+    }
+    let conn = db::connect();
+    // 自分のセッションだけ消せる（他のユーザーの id を指定しても、何も消えない）
+    let n = conn.execute("DELETE FROM sessions WHERE user_id=? AND substr(token_hash,1,16)=?", params![c.uid, id])?;
+    if n == 0 {
+        return Err(err(404, "その端末は見つかりません"));
+    }
+    info!("auth", "session revoked: uid {}", c.uid);
+    Ok((204, Value::Null))
 }
 
 /// このユーザーの、今のセッション以外をすべて削除する。削除した数を返す

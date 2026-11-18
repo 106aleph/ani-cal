@@ -180,6 +180,8 @@ pub fn route(req: &Req) -> Option<ApiResult> {
         ("POST", ["api", "auth", "ics_token"]) => auth::regenerate_ics_token(),
         ("GET", ["api", "users"]) => auth::list_users(),
         ("POST", ["api", "auth", "logout_others"]) => auth::logout_others(),
+        ("GET", ["api", "auth", "sessions"]) => auth::list_sessions(),
+        ("DELETE", ["api", "auth", "sessions", id]) => auth::revoke_session(id),
         ("POST", ["api", "auth", "totp", "setup"]) => auth::totp_setup(b),
         ("POST", ["api", "auth", "totp", "enable"]) => auth::totp_enable(b),
         ("POST", ["api", "auth", "totp", "disable"]) => auth::totp_disable(b),

@@ -489,11 +489,16 @@ fn verify_current_password(uid: i64, given: &str, hash: &str, msg: &str) -> Resu
     Ok(())
 }
 
+/// このユーザーの、今のセッション以外をすべて削除する。削除した数を返す
+fn revoke_other_sessions(conn: &Connection, uid: i64, keep: Option<&str>) -> usize {
+    conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", params![uid, keep.unwrap_or_default()]).unwrap_or(0)
+}
+
 /// 自分のほかの端末のログインをすべて解除する（今の端末は残す）
 pub fn logout_others() -> ApiResult {
     let c = cur();
     let conn = db::connect();
-    let n = conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", params![c.uid, c.session.unwrap_or_default()])?;
+    let n = revoke_other_sessions(&conn, c.uid, c.session.as_deref());
     info!("auth", "logout other devices: uid {} ({} sessions)", c.uid, n);
     ok(json!({"ok": true, "count": n}))
 }
@@ -641,7 +646,9 @@ pub fn totp_enable(body: &Value) -> ApiResult {
         conn.execute("INSERT OR IGNORE INTO recovery_codes(user_id, code_hash) VALUES (?,?)", params![c.uid, recovery_hash(&code)])?;
         codes.push(code);
     }
-    info!("auth", "2fa enabled: uid {}", c.uid);
+    // 盗まれたセッションが残っていても、2段階認証を入れた時点で無効にする（今の端末だけ残す）
+    let others = revoke_other_sessions(&conn, c.uid, c.session.as_deref());
+    info!("auth", "2fa enabled: uid {} (other sessions revoked: {})", c.uid, others);
     ok(json!({"recovery_codes": codes}))
 }
 
@@ -664,7 +671,8 @@ pub fn totp_disable(body: &Value) -> ApiResult {
         return Err(err(403, "認証コードが違います"));
     }
     clear_totp(&conn, c.uid)?;
-    info!("auth", "2fa disabled: uid {}", c.uid);
+    let others = revoke_other_sessions(&conn, c.uid, c.session.as_deref());
+    info!("auth", "2fa disabled: uid {} (other sessions revoked: {})", c.uid, others);
     ok(json!({"ok": true}))
 }
 

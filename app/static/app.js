@@ -51,7 +51,7 @@ function platHue(name) {
 
 /* 'YYYY-MM-DDTHH:MM' → 表示用 {key, time, date} */
 const state = {
-  tab: store.get('tab', 'calendar'),
+  tab: store.get('tab', 'calendar') === 'logs' ? 'admin' : store.get('tab', 'calendar'), // 旧「ログ」は「管理」に統合
   view: store.get('view', 'month'),
   late: store.get('late', true),
   hideWatched: store.get('hideWatched', false),
@@ -161,6 +161,7 @@ function applyMe(me) {
   $('#account-btn').textContent = me.username;
   $('#account-btn').title = `${me.username}（${me.admin ? '管理者' : '一般'}）のアカウント`;
   $$('.admin-only').forEach(el => { el.hidden = !me.admin; });
+  if (!me.admin && state.tab === 'admin') state.tab = 'calendar'; // 一般ユーザーには管理タブを開かせない
   const ics = $('a[href^="/calendar.ics"]');
   if (ics) ics.href = `/calendar.ics?token=${encodeURIComponent(me.ics_token)}`;
 }
@@ -258,93 +259,87 @@ async function icsDialog() {
   await icsDialog();
 }
 
-async function usersDialog() {
-  for (;;) {
-    const r = await formDialog({
-      title: 'ユーザー管理', submit: '閉じる',
-      html: `<p class="muted small">新しいユーザーは、招待コードを発行して本人に渡し、ログイン画面の「招待コードで新規登録」から登録してもらいます（コードは1回だけ使え、7日で期限切れ）。</p>
-        <div class="ulist inv"></div><div class="ulist"></div>`,
-      extra: [{ label: '招待コードを発行', value: 'add', cls: 'primary' }],
-      setup: dlg => {
-        const box = $$('.ulist', dlg)[1], ibox = $('.inv', dlg);
-        const render = async () => {
-          const [us, invs] = await Promise.all([api('/api/users'), api('/api/invites')]);
-          ibox.hidden = !invs.length;
-          ibox.innerHTML = invs.map(i => `<div class="urow" data-inv="${i.id}">
-            <div class="un"><input class="copyurl" readonly value="${esc(i.code.replace(/(.{4})(?=.)/g, '$1-'))}" aria-label="招待コード">
-              <div class="muted small">${i.role === 'admin' ? '管理者' : '一般'}として登録・${esc(i.expires_at.replace('T', ' '))} まで</div></div>
-            <button type="button" class="danger" data-delinv>取り消す</button></div>`).join('');
-          box.innerHTML = us.map(u => `<div class="urow" data-id="${u.id}" data-name="${esc(u.username)}">
-            <div class="un"><strong>${esc(u.username)}</strong>${u.id === state.me.id ? ' <span class="badge">自分</span>' : ''}
-              <div class="muted small">登録作品 ${u.tracks} 件${u.totp_enabled ? '・2段階認証オン' : ''}</div></div>
-            <select data-role aria-label="権限">
-              <option value="user" ${u.role === 'user' ? 'selected' : ''}>一般</option>
-              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者</option></select>
-            <button type="button" data-pw>パスワード再設定</button>
-            ${u.totp_enabled ? '<button type="button" data-totp>2段階認証を解除</button>' : ''}
-            <button type="button" class="danger" data-del ${u.id === state.me.id ? 'disabled' : ''}>削除</button></div>`).join('');
-        };
-        render().catch(e => toast(e.message, true));
-        const act = fn => async ev => { try { await fn(ev); } catch (e) { toast(e.message, true); } await render().catch(() => { }); };
-        box.addEventListener('change', act(async ev => {
-          const row = ev.target.closest('.urow');
-          if (ev.target.matches('[data-role]')) {
-            await api(`/api/users/${row.dataset.id}`, { method: 'PATCH', body: { role: ev.target.value } });
-            if (Number(row.dataset.id) === state.me.id) location.reload();
-            toast('権限を変更しました');
-          }
-        }));
-        ibox.addEventListener('focusin', ev => ev.target.select?.());
-        ibox.addEventListener('click', act(async ev => {
-          const row = ev.target.closest('.urow');
-          if (row && ev.target.matches('[data-delinv]')) {
-            await api(`/api/invites/${row.dataset.inv}`, { method: 'DELETE' });
-            toast('招待コードを取り消しました');
-          }
-        }));
-        box.addEventListener('click', act(async ev => {
-          const row = ev.target.closest('.urow');
-          if (!row) return;
-          const id = row.dataset.id, name = row.dataset.name;
-          if (ev.target.matches('[data-pw]')) {
-            const p = await formDialog({
-              title: `「${name}」のパスワード再設定`, submit: '再設定',
-              html: '<p class="muted small">そのユーザーのログインは解除されます。</p>',
-              fields: [{ name: 'password', label: '新しいパスワード', type: 'password', required: true, help: '10文字以上。ユーザー名を含めず、よくある文字列は避ける' }],
-            });
-            if (p.action !== 'ok') return;
-            await api(`/api/users/${id}`, { method: 'PATCH', body: { password: p.values.password } });
-            toast('パスワードを再設定しました');
-          } else if (ev.target.matches('[data-totp]')) {
-            if (!await confirmDialog(`「${name}」の2段階認証を解除しますか？認証アプリを失くした人向けです。本人のログインは解除されます。`, '解除')) return;
-            await api(`/api/users/${id}`, { method: 'PATCH', body: { reset_totp: true } });
-            toast('2段階認証を解除しました');
-          } else if (ev.target.matches('[data-del]')) {
-            if (!await confirmDialog(`「${name}」を削除しますか？登録作品と視聴記録も削除されます。`, '削除')) return;
-            await api(`/api/users/${id}`, { method: 'DELETE' });
-            toast('ユーザーを削除しました');
-          }
-        }));
-      },
-    });
-    if (r.action !== 'add') return;
+/* ============================================================ 管理タブ（管理者だけ）: ユーザーと招待 */
+async function renderUsersPanel() {
+  const [us, invs] = await Promise.all([api('/api/users'), api('/api/invites')]);
+  const ib = $('#admin-invites');
+  ib.innerHTML = invs.length ? invs.map(i => `<div class="urow" data-inv="${i.id}">
+      <div class="un"><input class="copyurl" readonly value="${esc(i.code.replace(/(.{4})(?=.)/g, '$1-'))}" aria-label="招待コード">
+        <div class="muted small">${i.role === 'admin' ? '管理者' : '一般'}として登録・${esc(i.expires_at.replace('T', ' '))} まで</div></div>
+      <button type="button" class="danger" data-delinv>取り消す</button></div>`).join('')
+    : '<p class="muted small">ありません</p>';
+  $('#admin-users').innerHTML = us.map(u => `<div class="urow" data-id="${u.id}" data-name="${esc(u.username)}">
+      <div class="un"><strong>${esc(u.username)}</strong>${u.id === state.me.id ? ' <span class="badge">自分</span>' : ''}
+        <div class="muted small">登録作品 ${u.tracks} 件${u.totp_enabled ? '・2段階認証オン' : '・2段階認証オフ'}</div></div>
+      <select data-role aria-label="権限">
+        <option value="user" ${u.role === 'user' ? 'selected' : ''}>一般</option>
+        <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者</option></select>
+      <button type="button" data-pw>パスワード再設定</button>
+      ${u.totp_enabled ? '<button type="button" data-totp>2段階認証を解除</button>' : ''}
+      <button type="button" class="danger" data-del ${u.id === state.me.id ? 'disabled' : ''}>削除</button></div>`).join('');
+}
+
+function bindUsersPanel() {
+  const box = $('#admin-users'), ibox = $('#admin-invites');
+  // 操作のあとは、一覧を読み直す
+  const act = fn => async ev => { try { await fn(ev); } catch (e) { toast(e.message, true); } await renderUsersPanel().catch(() => { }); };
+  $('#invite-new').addEventListener('click', act(async () => {
     const a = await formDialog({
       title: '招待コードを発行', submit: '発行',
-      fields: [
-        { name: 'role', label: '登録するユーザーの権限', type: 'select', value: 'user', options: [{ value: 'user', label: '一般' }, { value: 'admin', label: '管理者' }] },
-      ],
+      fields: [{ name: 'role', label: '登録するユーザーの権限', type: 'select', value: 'user', options: [{ value: 'user', label: '一般' }, { value: 'admin', label: '管理者' }] }],
     });
-    if (a.action !== 'ok') continue;
-    try {
-      await api('/api/invites', { method: 'POST', body: a.values });
-      toast('招待コードを発行しました');
-    } catch (e) { toast(e.message, true); }
-  }
+    if (a.action !== 'ok') return;
+    await api('/api/invites', { method: 'POST', body: a.values });
+    toast('招待コードを発行しました');
+  }));
+  ibox.addEventListener('focusin', ev => ev.target.select?.());
+  ibox.addEventListener('click', act(async ev => {
+    const row = ev.target.closest('.urow');
+    if (row && ev.target.matches('[data-delinv]')) {
+      await api(`/api/invites/${row.dataset.inv}`, { method: 'DELETE' });
+      toast('招待コードを取り消しました');
+    }
+  }));
+  box.addEventListener('change', act(async ev => {
+    const row = ev.target.closest('.urow');
+    if (row && ev.target.matches('[data-role]')) {
+      await api(`/api/users/${row.dataset.id}`, { method: 'PATCH', body: { role: ev.target.value } });
+      if (Number(row.dataset.id) === state.me.id) location.reload();
+      toast('権限を変更しました');
+    }
+  }));
+  box.addEventListener('click', act(async ev => {
+    const row = ev.target.closest('.urow');
+    if (!row) return;
+    const id = row.dataset.id, name = row.dataset.name;
+    if (ev.target.matches('[data-pw]')) {
+      const p = await formDialog({
+        title: `「${name}」のパスワード再設定`, submit: '再設定',
+        html: '<p class="muted small">そのユーザーのログインは解除されます。</p>',
+        fields: [{ name: 'password', label: '新しいパスワード', type: 'password', required: true, help: '10文字以上。ユーザー名を含めず、よくある文字列は避ける' }],
+      });
+      if (p.action !== 'ok') return;
+      await api(`/api/users/${id}`, { method: 'PATCH', body: { password: p.values.password } });
+      toast('パスワードを再設定しました');
+    } else if (ev.target.matches('[data-totp]')) {
+      if (!await confirmDialog(`「${name}」の2段階認証を解除しますか？認証アプリを失くした人向けです。本人のログインは解除されます。`, '解除')) return;
+      await api(`/api/users/${id}`, { method: 'PATCH', body: { reset_totp: true } });
+      toast('2段階認証を解除しました');
+    } else if (ev.target.matches('[data-del]')) {
+      if (!await confirmDialog(`「${name}」を削除しますか？登録作品と視聴記録も削除されます。`, '削除')) return;
+      await api(`/api/users/${id}`, { method: 'DELETE' });
+      toast('ユーザーを削除しました');
+    }
+  }));
+}
+
+async function renderAdmin() {
+  await Promise.all([renderUsersPanel(), renderLogs()]);
 }
 
 async function accountDialog() {
   const me = state.me;
-  const acts = [...(me.admin ? [['users', 'ユーザー管理']] : []), ['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['others', '他の端末をすべてログアウト']];
+  const acts = [...(me.admin ? [['admin', '管理画面を開く']] : []),['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['others', '他の端末をすべてログアウト']];
   const r = await formDialog({
     title: 'アカウント', submit: '閉じる',
     html: `<p><strong>${esc(me.username)}</strong> <span class="badge">${me.admin ? '管理者' : '一般'}</span></p>
@@ -352,7 +347,7 @@ async function accountDialog() {
         <button type="button" class="danger" data-do="logout">ログアウト</button></div>`,
     setup: dlg => dlg.addEventListener('click', ev => { const b = ev.target.closest('[data-do]'); if (b) dlg.close(b.dataset.do); }),
   });
-  if (r.action === 'users') await usersDialog();
+  if (r.action === 'admin') { state.tab = 'admin'; store.set('tab', 'admin'); await renderTab(); }
   else if (r.action === 'password') await passwordDialog();
   else if (r.action === 'totp') await totpDialog();
   else if (r.action === 'ics') await icsDialog();
@@ -998,6 +993,8 @@ async function refreshStatus() {
     el.className = 'muted';
   }
   el.title = s.last_message || '';
+  const ast = $('#admin-sync-status');
+  ast.textContent = el.textContent; ast.className = el.className + ' small'; // 管理タブにも同じ状況を出す
   $('#sync-btn').disabled = s.running;
   $('#sync-range-btn').disabled = s.running;
   // 中断は取得中だけ押せる。中断要求後（停止処理中）も、二重に押せないよう無効にする
@@ -1017,7 +1014,7 @@ async function renderTab() {
   $$('.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + state.tab));
   if (state.tab === 'calendar') await renderCalendar();
   else if (state.tab === 'catalog') await loadCatalog();
-  else if (state.tab === 'logs') await renderLogs();
+  else if (state.tab === 'admin') await renderAdmin();
   else if (state.tab === 'archive') await renderTracks(1);
   else if (state.tab === 'dropped') await renderTracks(2);
   else await renderTracks(0);
@@ -1112,6 +1109,7 @@ function init() {
     }));
   };
   $$('.track-root').forEach(bindTrackRoot);
+  bindUsersPanel();
   $('#track-add-manual').addEventListener('click', guard(manualAdd));
 
   $('#sync-btn').addEventListener('click', guard(async () => {

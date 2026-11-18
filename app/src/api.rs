@@ -282,6 +282,7 @@ fn trigger_sync(body: &Value) -> ApiResult {
 }
 
 fn sync_logs(q: &HashMap<String, String>) -> ApiResult {
+    auth::require_admin()?; // 取得履歴は管理者だけ
     let limit: i64 = match q.get("limit") {
         None => 200,
         Some(s) => s.parse().ok().filter(|n| (1..=500).contains(n)).ok_or_else(|| err(422, "limit は 1〜500 で指定してください"))?,
@@ -291,6 +292,7 @@ fn sync_logs(q: &HashMap<String, String>) -> ApiResult {
 }
 
 fn coverage() -> ApiResult {
+    auth::require_admin()?; // 取得済みの期間も管理者だけ
     let conn = db::connect();
     let v: Vec<Value> = db::get_coverage(&conn)
         .into_iter()

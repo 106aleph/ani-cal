@@ -268,16 +268,19 @@ async function renderUsersPanel() {
         <div class="muted small">${i.role === 'admin' ? '管理者' : '一般'}として登録・${esc(i.expires_at.replace('T', ' '))} まで</div></div>
       <button type="button" class="danger" data-delinv>取り消す</button></div>`).join('')
     : '<p class="muted small">ありません</p>';
-  $('#admin-users').innerHTML = us.map(u => `<div class="urow" data-id="${u.id}" data-name="${esc(u.username)}">
-      <div class="un"><strong>${esc(u.username)}</strong>${u.id === state.me.id ? ' <span class="badge">自分</span>' : ''}
+  // 最後の管理者は、降格も削除もできない（サーバーも断る）。最初から選べない見た目にする
+  const admins = us.filter(u => u.role === 'admin').length;
+  $('#admin-users').innerHTML = us.map(u => { const last = u.role === 'admin' && admins <= 1; return `<div class="urow" data-id="${u.id}" data-name="${esc(u.username)}">
+      <div class="un"><strong>${esc(u.username)}</strong>${u.id === state.me.id ? ' <span class="badge">自分</span>' : ''}${last ? ' <span class="badge">最後の管理者</span>' : ''}
         <div class="muted small">登録作品 ${u.tracks} 件${u.totp_enabled ? '・2段階認証オン' : '・2段階認証オフ'}</div>
         <div class="muted small">登録 ${esc((u.created_at || '').replace('T', ' '))}・最終ログイン ${u.last_login_at ? esc(u.last_login_at.replace('T', ' ')) : '記録なし'}</div></div>
-      <select data-role aria-label="権限">
+      <select data-role aria-label="権限" ${last ? 'disabled title="最後の管理者の権限は変更できません。先にほかのユーザーを管理者にしてください"' : ''}>
         <option value="user" ${u.role === 'user' ? 'selected' : ''}>一般</option>
         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者</option></select>
       <button type="button" data-pw>パスワード再設定</button>
       ${u.totp_enabled ? '<button type="button" data-totp>2段階認証を解除</button>' : ''}
-      <button type="button" class="danger" data-del ${u.id === state.me.id ? 'disabled' : ''}>削除</button></div>`).join('');
+      <button type="button" class="danger" data-del ${u.id === state.me.id || last ? 'disabled' : ''}
+        ${last ? 'title="最後の管理者は削除できません"' : u.id === state.me.id ? 'title="自分自身は削除できません"' : ''}>削除</button></div>`; }).join('');
 }
 
 function bindUsersPanel() {

@@ -5,8 +5,9 @@
 ## 必要な環境
 
 - Linux ホスト（動作確認: Debian 13）
-- Docker と Docker Compose
-- Tailscale（管理画面で MagicDNS と HTTPS Certificates を有効化）
+- Git
+- Docker と Docker Compose v2.24 以上
+- Tailscale（tailnet で使う場合。管理画面で MagicDNS と HTTPS Certificates を有効化）
 - `cal.syoboi.jp` と各社 Push サービスへの HTTPS 通信（外向き）
 
 ### 推奨スペック

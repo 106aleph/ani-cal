@@ -315,13 +315,35 @@ fn coverage() -> ApiResult {
 }
 
 // ---------------------------------------------------------------- 作品一覧
-fn catalog() -> ApiResult {
-    let cfg = config::get();
-    let now = config::now();
-    let mask: i64 = if cfg.skip_rebroadcast { 8 } else { 0 };
-    let conn = db::connect();
-    let rows = db::query_json(
-        &conn,
+/// 作品×媒体ごとの集計。しょぼいカレンダー由来の共通データだけで、ユーザーごとの情報は入れない
+/// （数十万件の配信予定を数えるので重く、同期が終わるまで変わらないため、結果を覚えておく）
+static CATALOG_ROWS: std::sync::Mutex<Option<std::sync::Arc<Vec<Value>>>> = std::sync::Mutex::new(None);
+
+/// 同期が終わったとき（成功・失敗・中断を問わず）に呼び、覚えた集計を捨てる
+pub fn invalidate_catalog() {
+    *CATALOG_ROWS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// 起動時に先に作っておく（最初に開いた人を待たせない）
+pub fn warm_catalog() {
+    let _ = catalog_rows(&db::connect());
+}
+
+fn catalog_rows(conn: &Connection) -> Result<std::sync::Arc<Vec<Value>>, ApiErr> {
+    // 作っている間は鍵を持つので、同時に開かれても集計は1回だけ。捨てる処理も鍵を待つので、作りかけを覚えたままにならない
+    let mut slot = CATALOG_ROWS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(rows) = slot.as_ref() {
+        return Ok(rows.clone());
+    }
+    let mask: i64 = if config::get().skip_rebroadcast { 8 } else { 0 };
+    let rows = std::sync::Arc::new(catalog_query(conn, mask)?);
+    *slot = Some(rows.clone());
+    Ok(rows)
+}
+
+fn catalog_query(conn: &Connection, mask: i64) -> Result<Vec<Value>, ApiErr> {
+    Ok(db::query_json(
+        conn,
         "SELECT t.tid, t.title, t.cat, t.first_year, t.first_month,
                 p.chid, c.name AS chname, c.gid, g.name AS gname,
                 MIN(p.start_at) AS first_start, MAX(p.start_at) AS last_start,
@@ -334,7 +356,14 @@ fn catalog() -> ApiResult {
          WHERE p.deleted=0 AND (p.flag & ?)=0
          GROUP BY p.tid, p.chid",
         [mask],
-    )?;
+    )?)
+}
+
+fn catalog() -> ApiResult {
+    let cfg = config::get();
+    let now = config::now();
+    let conn = db::connect();
+    let rows = catalog_rows(&conn)?;
     // (tid, chid) → (track id, archived)
     let mut tracked: HashMap<(i64, i64), (i64, i64)> = HashMap::new();
     {
@@ -348,7 +377,7 @@ fn catalog() -> ApiResult {
     }
     let mut order: Vec<i64> = vec![];
     let mut items: HashMap<i64, (Value, Vec<Value>)> = HashMap::new();
-    for r in &rows {
+    for r in rows.iter() {
         let cat = jint(r, "cat");
         if !cfg.new_cats.is_empty() && !cat.map(|c| cfg.new_cats.contains(&c)).unwrap_or(false) {
             continue;

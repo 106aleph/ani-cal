@@ -451,6 +451,8 @@ pub fn run_sync(start_date: Option<NaiveDateTime>, end_date: Option<NaiveDateTim
         // 中断は失敗として数えない
         record_result(ok, &trigger);
     }
+    // 成功・失敗・中断のどれでも、途中まで入った配信予定があり得るので、作品一覧の集計を捨てる
+    crate::api::invalidate_catalog();
     update(|s| {
         s.running = false;
         s.progress = None;

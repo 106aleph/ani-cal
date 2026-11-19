@@ -374,6 +374,7 @@ fn main() {
         std::process::exit(0);
     });
     sync::start_scheduler();
+    std::thread::Builder::new().name("warm".into()).spawn(api::warm_catalog).ok(); // 作品一覧の集計を先に作る
     notify::start();
 
     let server = Arc::new(Server::http(&cfg.bind).unwrap_or_else(|e| panic!("{} で待ち受けできません: {}", cfg.bind, e)));

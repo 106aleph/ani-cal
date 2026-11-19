@@ -734,20 +734,24 @@ function renderCatalog() {
   const c = state.catalog;
   if (!c) return;
   const season = $('#cat-season').value, plat = $('#cat-platform').value;
-  const net = $('#cat-net').checked, untracked = $('#cat-untracked').checked;
+  const net = $('#cat-net').checked, untracked = $('#cat-untracked').checked, airingOnly = $('#cat-airing').checked;
   const q = $('#cat-q').value.trim().toLowerCase();
   store.set('catSeason', season); store.set('catPlatform', plat);
+  // 配信中 = 第1話（無ければ最初の話）が始まっていて、最後の話がまだ先にある媒体
+  const nowT = Date.now();
+  const airing = ch => ch.first_start && ch.last_start && new Date(ch.first_start) <= nowT && new Date(ch.last_start) >= nowT;
   const items = c.items.filter(it =>
     (!season || String(it.season_key) === season) &&
     (!q || it.title.toLowerCase().includes(q)) &&
     (!plat || it.channels.some(ch => ch.name === plat)) &&
+    (!airingOnly || it.channels.some(ch => airing(ch) && (!plat || ch.name === plat) && (!net || ch.is_net))) &&
     (!untracked || !it.channels.some(ch => ch.track_id)));
   if (!c.items.length) {
     $('#cat-list').innerHTML = '<p class="empty">データがありません。右上の「今すぐ取得」を押してください（初回は数分かかります）。</p>';
     return;
   }
   $('#cat-list').innerHTML = `<p class="muted small">${items.length} 作品</p>` + items.map(it => {
-    let chs = it.channels.filter(ch => (!net || ch.is_net));
+    let chs = it.channels.filter(ch => (!net || ch.is_net) && (!airingOnly || airing(ch)));
     if (plat) chs.sort((a, b) => (b.name === plat) - (a.name === plat));
     return `<div class="work">
       <div class="wt"><strong>${esc(it.title)}</strong> <span class="muted small">${esc(it.season || '')}</span></div>
@@ -1098,7 +1102,7 @@ function init() {
   bindEventClicks($('#cal-week'), renderCalendar);
   bindEventClicks($('#cal-list'), renderCalendar);
 
-  ['#cat-season', '#cat-platform', '#cat-net', '#cat-untracked'].forEach(s => $(s).addEventListener('change', renderCatalog));
+  ['#cat-season', '#cat-platform', '#cat-net', '#cat-untracked', '#cat-airing'].forEach(s => $(s).addEventListener('change', renderCatalog));
   $('#cat-q').addEventListener('input', renderCatalog);
   $('#cat-list').addEventListener('click', guard(async ev => {
     const b = ev.target.closest('.chip');

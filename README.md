@@ -7,7 +7,7 @@
 - Linux ホスト (動作確認: Debian 13)
 - 2コア・2GB・空きディスク 5GB 以上 (ビルド時。起動後は約 10〜15MB で動作)
 - Docker と Docker Compose v2.24 以上 (Rust のツールチェーンはホストに不要)
-- Git と SSH 鍵 (非公開リポジトリの取得用)
+- Git
 - Tailscale (tailnet で使う場合。MagicDNS と HTTPS Certificates を有効化)
 - 外向きの HTTPS 通信
   - 実行時: `cal.syoboi.jp` と各社 Push サービス (Turnstile を使う場合は `challenges.cloudflare.com` も)
@@ -19,7 +19,7 @@
 ## セットアップ
 
 ```bash
-git clone git@github.com:106aleph/ani-cal.git && cd ani-cal   # 非公開リポジトリ (SSH 鍵が必要)
+git clone https://github.com/106aleph/ani-cal.git && cd ani-cal
 cp .env.example .env              # SYOBOI_UA_URL を設定 (下記)
 docker compose up -d --build      # 初回取得は数分 (docker compose logs -f で確認)
 ```
@@ -27,7 +27,7 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
 1. **管理者を登録**: ホスト上で `http://127.0.0.1:8000/` を開き、ユーザー名とパスワード (10文字以上)を決めて登録します。最初のユーザーが管理者になり、以後この画面は使えません。SSH で入っている場合は、`ssh -L 8000:127.0.0.1:8000 <ホスト>` で手元に転送すると開けます。以前のバージョンの登録作品・通知は、この管理者に引き継がれます。
 2. **公開**: `sudo tailscale serve --bg 8000` を実行します (`APP_PORT` を変えた場合はその番号)。tailnet 内の端末から `https://<ホスト名>.<tailnet名>.ts.net/` を開いて使います。ブラウザからホーム画面やデスクトップにインストール (PWA) もできます。
 
-- `SYOBOI_UA_URL` には、連絡方法を載せた**誰でも見られる**ページの URL を設定します。非公開リポジトリの URL は使えません。この URL がしょぼいカレンダーへの User-Agent に入り、問題があれば運営から連絡できます。
+- `SYOBOI_UA_URL` には、**自分への**連絡方法を載せた、誰でも見られるページの URL を設定します。この URL がしょぼいカレンダーへの User-Agent に入り、問題があれば運営から連絡できます。このリポジトリの連絡先は作者のものなので、自分で運用するときは使わないでください。
 - アプリのポートをインターネットへ直接公開しないでください。公開するときは「[公開するときのセキュリティ](#公開するときのセキュリティ)」に従ってください。
 - サブパス公開 (`--set-path`) は非対応です。他のサービスと併用するときは、`--https=8443` など別ポートにしてください。
 
@@ -190,7 +190,7 @@ Rust 1.89 以上が必要です。画面 (`app/static/`) はビルド時にバ�
 
 ## 連絡先
 
-個人用のアプリです。取得について問題があれば、[Misskey](https://misskey.106aleph.xyz/@106aleph) からご連絡ください。
+個人用のアプリで、サポートや機能追加は保証しません。しょぼいカレンダーへの取得について問題があれば、[Misskey](https://misskey.106aleph.xyz/@106aleph) からご連絡ください。脆弱性の報告は、[SECURITY.md](SECURITY.md) をご覧ください。
 
 ## ライセンス
 

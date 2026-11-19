@@ -818,6 +818,7 @@ async function renderTracks(kind = 0) {
       <summary>
         <span class="bar"></span>
         <span class="tt"><strong>${esc(t.display_title)}</strong>
+          ${!archived && t.season ? `<span class="badge season">${esc(t.season)}</span>` : ''}
           <span class="badge plat" style="--ph:${platHue(t.display_platform)}">${esc(t.display_platform || '媒体未設定')}</span>
           ${t.tid ? '' : '<span class="badge src-manual">手動登録</span>'}
           ${t.auto_sync || !t.tid ? '' : '<span class="badge hidden">自動取得OFF</span>'}</span>

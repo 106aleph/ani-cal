@@ -147,7 +147,7 @@ impl Drop for HashSlot {
 }
 
 /// ログに書く文字列から、改行などの制御文字を除く（ログの偽造防止）。長すぎるものは切る
-fn clean(s: &str) -> String {
+pub fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).take(40).collect()
 }
 
@@ -969,11 +969,31 @@ mod policy_tests {
 /// `ani-cal user list` / `reset-password <名前>` / `reset-2fa <名前>`
 /// コンテナ内で実行する（root だと DB の関連ファイルが root 所有になり、アプリが起動できなくなるため、`-u app` を付ける）:
 ///   docker compose exec -u app app ani-cal user reset-password <名前>
-pub fn cli(args: &[String]) -> i32 {
+/// root で実行されていたら、案内を出して true を返す（DB のファイルが root の所有になり、アプリが起動できなくなるため）
+pub fn refuse_root() -> bool {
     use std::os::unix::fs::MetadataExt;
     if std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(1) == 0 {
         eprintln!("root では実行できません（DB のファイルが root の所有になり、アプリが起動できなくなります）。");
         eprintln!("`docker compose exec -u app app ani-cal user ...` のように、-u app を付けて実行してください。");
+        return true;
+    }
+    false
+}
+
+/// 管理者の操作で、本文の `password` が本人のものか確かめる（誤りが続いたら止める）。ユーザー名を返す
+pub fn confirm_admin_password(body: &Value) -> Result<String, ApiErr> {
+    require_admin()?;
+    let c = cur();
+    let pw = opt_str(&body_obj(body), "password")?.unwrap_or_default();
+    let conn = db::connect();
+    let (name, hash): (String, String) =
+        conn.query_row("SELECT username, password_hash FROM users WHERE id=?", [c.uid], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    verify_current_password(c.uid, &pw, &hash, "パスワードが違います")?;
+    Ok(name)
+}
+
+pub fn cli(args: &[String]) -> i32 {
+    if refuse_root() {
         return 2;
     }
     let usage = || {

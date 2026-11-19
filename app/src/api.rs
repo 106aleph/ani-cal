@@ -1,6 +1,6 @@
 //! アニメ配信カレンダー API（Python 版 main.py と同じ入出力）
 use crate::util::*;
-use crate::{auth, config, db, notify, sync};
+use crate::{auth, config, db, notify, sync, turnstile};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use rusqlite::{named_params, params, params_from_iter, types::Value as SqlV, Connection};
 use serde_json::{json, Value};
@@ -200,6 +200,9 @@ pub fn route(req: &Req) -> Option<ApiResult> {
         ("POST", ["api", "tracks", id, "archive"]) => archive(id, true),
         ("POST", ["api", "tracks", id, "unarchive"]) => archive(id, false),
         ("POST", ["api", "tracks", id, "drop"]) => drop_track(id),
+        ("GET", ["api", "turnstile"]) => turnstile::status(),
+        ("POST", ["api", "turnstile"]) => turnstile::save(b),
+        ("POST", ["api", "turnstile", "disable"]) => turnstile::disable(b),
         ("PATCH", ["api", "tracks", id]) => update_track(id, b),
         ("DELETE", ["api", "tracks", id]) => delete_track(id),
         ("POST", ["api", "tracks", id, "resync"]) => resync_track(id),

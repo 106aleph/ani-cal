@@ -29,6 +29,8 @@ pub struct Config {
     pub require_2fa: String,
     /// Cookie に Secure を常に付ける（プロキシが X-Forwarded-Proto を付けない構成用）
     pub cookie_secure: bool,
+    /// Cloudflare Turnstile の確認先（キーは管理画面で設定して DB に保存する。ここはテスト用に差し替えられる）
+    pub turnstile_verify_url: String,
     pub skip_rebroadcast: bool,
     pub new_cats: HashSet<i64>,
     pub net_group_ids: HashSet<i64>,
@@ -108,6 +110,9 @@ pub fn get() -> &'static Config {
                 _ => "admin".to_string(), // 既定: 管理者は2段階認証が必須
             },
             cookie_secure: boolean("COOKIE_SECURE", false),
+            turnstile_verify_url: env("TURNSTILE_VERIFY_URL")
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "https://challenges.cloudflare.com/turnstile/v0/siteverify".to_string()),
             skip_rebroadcast: boolean("SKIP_REBROADCAST", true),
             new_cats: intset("NEW_CATS", "1,10"),
             net_group_ids: intset("NET_GROUP_IDS", ""),

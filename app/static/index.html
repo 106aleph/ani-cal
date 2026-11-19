@@ -117,6 +117,16 @@
     </div>
 
     <div class="admin-card">
+      <h2>人間確認（Cloudflare Turnstile）</h2>
+      <p class="muted small">インターネットに公開するときの、ログイン・新規登録の bot 対策です。tailnet だけで使うなら不要です。キーは、Cloudflare ダッシュボードの Turnstile でウィジェットを作って発行します。</p>
+      <p id="admin-turnstile-status" class="small" aria-live="polite">-</p>
+      <div class="admin-actions">
+        <button id="turnstile-edit" class="primary">設定する</button>
+        <button id="turnstile-off" class="danger" hidden>無効にする</button>
+      </div>
+    </div>
+
+    <div class="admin-card">
       <h2>取得履歴</h2>
       <p class="muted small">しょぼいカレンダーからの取得履歴です（新しい順・最大500件）。</p>
       <div id="log-coverage" class="coverage"></div>
@@ -135,6 +145,7 @@
       <label class="field"><span>パスワード</span><input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
       <label class="field reg-only" hidden><span>パスワード（確認）</span><input id="login-pass2" type="password" autocomplete="new-password"></label>
       <label class="field" id="login-otp-row" hidden><span>認証コード</span><input id="login-otp" name="otp" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="123456"></label>
+      <div id="login-turnstile" hidden></div>
       <p id="login-err" class="login-err" role="alert"></p>
     </div>
     <menu><button type="button" id="login-toggle">招待コードで新規登録</button><span class="spacer"></span><button id="login-submit" class="primary">ログイン</button></menu>

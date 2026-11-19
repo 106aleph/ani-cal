@@ -7,6 +7,7 @@ mod log;
 mod notify;
 mod sync;
 mod syoboi;
+mod turnstile;
 mod util;
 
 use serde_json::{json, Value};
@@ -59,12 +60,18 @@ fn header(k: &str, v: &str) -> Header {
 }
 
 /// すべての応答に付けるセキュリティ関連のヘッダ
+/// CSP。Turnstile を使っている間だけ、Cloudflare の確認用の script と枠を許可する
+fn csp() -> &'static str {
+    const PLAIN: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
+         frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
+    const TURNSTILE: &str = "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
+         frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
+    if turnstile::enabled() { TURNSTILE } else { PLAIN }
+}
+
 fn with_sec<R: std::io::Read>(r: Response<R>) -> Response<R> {
-    r.with_header(header(
-        "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
-         frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
-    ))
+    r.with_header(header("Content-Security-Policy", csp()))
     .with_header(header("X-Content-Type-Options", "nosniff"))
     .with_header(header("X-Frame-Options", "DENY"))
     .with_header(header("Referrer-Policy", "no-referrer")) // 購読URL（トークン入り）を外部へ漏らさない
@@ -283,6 +290,12 @@ fn handle(mut rq: Request) {
     {
         return respond_json(rq, 429, &util::msg("リクエストが多すぎます。しばらく待ってからやり直してください"));
     }
+    // 人間確認（Turnstile）は、失敗の回数にも数えず、パスワードの計算にも入る前に済ませる
+    if method == "POST" && matches!(path.as_str(), "/api/auth/login" | "/api/auth/register") {
+        if let Err(e) = turnstile::check(&body, &client_id(&rq)) {
+            return respond_json(rq, e.status, &util::msg(&e.detail));
+        }
+    }
     if method == "POST" && path == "/api/auth/login" {
         let client = client_id(&rq);
         return match auth::login(&body, &client) {
@@ -293,7 +306,7 @@ fn handle(mut rq: Request) {
         };
     }
     if method == "GET" && path == "/api/auth/setup" {
-        return respond_json(rq, 200, &json!({"needed": auth::setup_needed()}));
+        return respond_json(rq, 200, &json!({"needed": auth::setup_needed(), "turnstile_site_key": turnstile::site_key()}));
     }
     if method == "POST" && path == "/api/auth/setup" {
         return match auth::setup(&body) {
@@ -361,8 +374,15 @@ fn main() {
     if args.first().map(|s| s.as_str()) == Some("user") {
         std::process::exit(auth::cli(&args[1..]));
     }
+    if args.first().map(|s| s.as_str()) == Some("turnstile") {
+        std::process::exit(turnstile::cli(&args[1..]));
+    }
     let cfg = config::get();
     db::init();
+    turnstile::load();
+    if turnstile::enabled() {
+        info!("app", "Cloudflare Turnstile: 有効（ログイン・新規登録で人間確認）");
+    }
     db::restrict_permissions();
     if cfg.syoboi_ua_url.is_empty() {
         warn!("app", "SYOBOI_UA_URL が未設定です。連絡方法を載せた公開ページのURLを .env に設定してください（README 参照）");

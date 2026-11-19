@@ -141,6 +141,45 @@ function setLoginMode(mode) {
   $('#login-pass').autocomplete = creating ? 'new-password' : 'current-password';
   $('#login-err').textContent = '';
   $('#login-otp-row').hidden = true; $('#login-otp').required = false; $('#login-otp').value = '';
+  tsSetup();
+}
+
+/* Cloudflare Turnstile（人間かどうかの確認）。サーバーにキーの設定があるときだけ、ログイン・新規登録で使う */
+let tsKey = null, tsWidget, tsToken = '', tsLoading = null;
+function tsLoad() {
+  if (!tsLoading) {
+    tsLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = () => { tsLoading = null; reject(new Error('人間確認の部品を読み込めませんでした。通信を確認して、再読み込みしてください')); };
+      document.head.append(s);
+    });
+  }
+  return tsLoading;
+}
+async function tsSetup() {
+  const box = $('#login-turnstile'), need = !!tsKey && loginMode !== 'setup'; // 最初の管理者の登録は対象外
+  box.hidden = !need;
+  if (!need || tsWidget !== undefined) return;
+  tsWidget = null; // 描画中
+  try {
+    await tsLoad();
+    tsWidget = turnstile.render(box, {
+      sitekey: tsKey, theme: 'auto',
+      callback: t => { tsToken = t; },
+      'expired-callback': () => { tsToken = ''; },
+      'error-callback': () => { tsToken = ''; $('#login-err').textContent = '人間確認でエラーが起きました。再読み込みしてください'; },
+    });
+  } catch (e) {
+    tsWidget = undefined;
+    $('#login-err').textContent = e.message;
+  }
+}
+function tsReset() { // トークンは1回しか使えないので、送るたびに取り直す
+  tsToken = '';
+  try { if (tsWidget) turnstile.reset(tsWidget); } catch { /* 取り直せなくても、次の操作で再描画される */ }
 }
 
 async function showLogin(msg) {
@@ -150,10 +189,12 @@ async function showLogin(msg) {
   if (loginMode !== 'setup') {
     try {
       const s = await (await fetch('/api/auth/setup')).json();
+      tsKey = s.turnstile_site_key || null;
       if (s.needed) { setLoginMode('setup'); return; }
     } catch { /* ログイン画面のままにする */ }
   }
   $('#login-err').textContent = msg || '';
+  tsSetup();
 }
 
 function applyMe(me) {
@@ -326,7 +367,47 @@ function bindUsersPanel() {
 }
 
 async function renderAdmin() {
-  await Promise.all([renderUsersPanel(), renderLogs()]);
+  await Promise.all([renderUsersPanel(), renderTurnstilePanel(), renderLogs()]);
+}
+
+/* Cloudflare Turnstile の設定（管理者だけ）。シークレットキーは保存したら画面に戻さない */
+let tsState = { enabled: false, site_key: null };
+async function renderTurnstilePanel() {
+  tsState = await api('/api/turnstile');
+  const st = $('#admin-turnstile-status');
+  st.textContent = tsState.enabled ? `オン（サイトキー: ${tsState.site_key}）。ログイン・新規登録で人間確認をします。` : 'オフ';
+  st.className = 'small ' + (tsState.enabled ? '' : 'muted');
+  $('#turnstile-edit').textContent = tsState.enabled ? '変更する' : '設定する';
+  $('#turnstile-off').hidden = !tsState.enabled;
+}
+function bindTurnstilePanel() {
+  const warn = '<p class="muted small">キーを誤ると、ログインできなくなります。このあとログインが残っている間は、この画面から直せます。ログインできなくなったときは、ホストで <code>docker compose exec -u app app ani-cal turnstile off</code> を実行してください。</p>';
+  $('#turnstile-edit').addEventListener('click', guard(async () => {
+    const r = await formDialog({
+      title: '人間確認の設定', submit: '保存',
+      html: warn,
+      fields: [
+        { name: 'site_key', label: 'サイトキー', required: true, value: tsState.site_key || '' },
+        { name: 'secret_key', label: 'シークレットキー', type: 'password', required: !tsState.enabled, help: tsState.enabled ? '変えないときは、空のままにします' : 'Cloudflare で発行したもの。保存すると、画面には表示しません' },
+        { name: 'password', label: '現在のパスワード', type: 'password', required: true },
+      ],
+    });
+    if (r.action !== 'ok') return;
+    await api('/api/turnstile', { method: 'POST', body: r.values });
+    toast('人間確認を設定しました');
+    await renderTurnstilePanel();
+  }));
+  $('#turnstile-off').addEventListener('click', guard(async () => {
+    const r = await formDialog({
+      title: '人間確認を無効にする', submit: '無効にする',
+      html: '<p class="muted small">ログイン・新規登録で、人間確認をしなくなります。</p>',
+      fields: [{ name: 'password', label: '現在のパスワード', type: 'password', required: true }],
+    });
+    if (r.action !== 'ok') return;
+    await api('/api/turnstile/disable', { method: 'POST', body: r.values });
+    toast('人間確認を無効にしました');
+    await renderTurnstilePanel();
+  }));
 }
 
 async function accountDialog() {
@@ -1156,6 +1237,7 @@ function init() {
   };
   $$('.track-root').forEach(bindTrackRoot);
   bindUsersPanel();
+  bindTurnstilePanel();
   $('#track-add-manual').addEventListener('click', guard(manualAdd));
 
   $('#sync-btn').addEventListener('click', guard(async () => {
@@ -1207,13 +1289,18 @@ function init() {
     ev.preventDefault();
     const btn = $('#login-submit');
     btn.disabled = true;
+    let sent = false; // トークンを使ったときだけ、取り直す
     try {
       const reg = loginMode === 'register', setup = loginMode === 'setup';
       if ((reg || setup) && $('#login-pass').value !== $('#login-pass2').value) throw new Error('パスワード（確認）が一致しません');
+      const useTs = !!tsKey && !setup;
+      if (useTs && !tsToken) throw new Error('人間かどうかの確認が終わるまで、少し待ってください');
+      sent = useTs;
       const r = await api(setup ? '/api/auth/setup' : reg ? '/api/auth/register' : '/api/auth/login', {
         method: 'POST',
         body: {
           username: $('#login-user').value.trim(), password: $('#login-pass').value,
+          ...(useTs ? { turnstile: tsToken } : {}),
           ...(reg ? { code: $('#login-code').value } : {}),
           ...(!reg && !setup && !$('#login-otp-row').hidden ? { otp: $('#login-otp').value } : {}),
         },
@@ -1224,12 +1311,14 @@ function init() {
         $('#login-otp').focus();
         $('#login-err').textContent = '認証アプリの6桁のコード（または、リカバリーコード）を入力してください。';
         btn.disabled = false;
+        if (sent) tsReset(); // 2回目の送信には、新しい確認が要る
         return;
       }
       location.reload();
     } catch (e) {
       $('#login-err').textContent = e.message;
       btn.disabled = false;
+      if (sent) tsReset();
     }
   });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { });

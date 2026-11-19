@@ -373,6 +373,10 @@ input[type=date], input[type=datetime-local] { color-scheme: dark; }
 .admin-card .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .admin-card .ulist { max-height: none; overflow: visible; margin: 6px 0; }
 
-/* 作品一覧: 視聴中断した作品の媒体は、塗りつぶさず、「視聴中断」と表示する */
-.chip.on.dropped { background: transparent; color: inherit; border-style: dashed; font-weight: 400; }
-.chip .chip-state { font-size: 11px; padding: 0 6px; margin-left: 2px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+/* 作品一覧: 登録中は塗りつぶし、視聴済み（緑）・視聴中断（黄）は色付きの枠＋同色のラベルで見分ける */
+.chip.on.watched { background: rgba(111, 211, 154, .14); color: var(--fg); border-color: var(--ok); font-weight: 600; }
+.chip.on.dropped { background: rgba(240, 179, 90, .14); color: var(--fg); border-color: var(--warn); font-weight: 600; }
+.chip .chip-state { font-size: 11px; font-weight: 700; padding: 1px 7px; margin-left: 4px; border-radius: 999px; }
+.chip .chip-state.watched { background: var(--ok); color: #0b2415; }
+.chip .chip-state.dropped { background: var(--warn); color: #2a1a02; }
+

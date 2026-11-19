@@ -769,10 +769,10 @@ function renderCatalog() {
     if (plat) chs.sort((a, b) => (b.name === plat) - (a.name === plat));
     return `<div class="work">
       <div class="wt"><strong>${esc(it.title)}</strong> <span class="muted small">${esc(it.season || '')}</span></div>
-      <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${ch.track_state === 2 ? 'dropped' : ''} ${plat && ch.name === plat ? 'hl' : ''}"
+      <div class="chips">${chs.map(ch => `<button class="chip ${ch.is_net ? 'net' : ''} ${ch.track_id ? 'on' : ''} ${ch.track_state === 2 ? 'dropped' : ch.track_archived ? 'watched' : ''} ${plat && ch.name === plat ? 'hl' : ''}"
           data-tid="${it.tid}" data-chid="${ch.chid}" data-track="${ch.track_id || ''}" data-state="${ch.track_state || 0}"
           title="${esc(ch.group || '')}${ch.has_ep1 ? '' : '（第1話の日時は未取得）'}${ch.track_state === 2 ? '（視聴中断）' : ch.track_archived ? '（視聴済み）' : ''}">
-          ${ch.track_id ? '✓ ' : ''}${esc(ch.name)}${ch.track_state === 2 ? ' <span class="chip-state">視聴中断</span>' : ''} <span class="when">${esc(fmtFull(ch.first_start))}${ch.has_ep1 ? '〜' : '頃〜'}</span></button>`).join('')
+          ${ch.track_id ? '✓ ' : ''}${esc(ch.name)}${ch.track_state === 2 ? ' <span class="chip-state dropped">視聴中断</span>' : ch.track_archived ? ' <span class="chip-state watched">視聴済み</span>' : ''} <span class="when">${esc(fmtFull(ch.first_start))}${ch.has_ep1 ? '〜' : '頃〜'}</span></button>`).join('')
         || '<span class="muted small">（条件に合う媒体なし）</span>'}</div></div>`;
   }).join('');
 }

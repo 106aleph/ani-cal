@@ -78,6 +78,10 @@ pub fn init() {
             conn.execute_batch(ddl).ok();
         }
     }
+    // 廃止した ICS 購読のトークン列（NOT NULL なので、残すと新規ユーザーを作れない）
+    if ucols.iter().any(|x| x == "ics_token") {
+        conn.execute_batch("ALTER TABLE users DROP COLUMN ics_token").ok();
+    }
     // 最終ログイン日時。列を足すときは、いま残っているセッションの作成日時（＝直近のログイン）で埋める
     if !ucols.iter().any(|x| x == "last_login_at") {
         conn.execute_batch("ALTER TABLE users ADD COLUMN last_login_at TEXT").ok();

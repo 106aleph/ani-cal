@@ -42,16 +42,15 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
 | 視聴中断 | 途中で見るのをやめた作品の置き場。「視聴中断」で移動、「登録作品に戻す」で復帰。自動では戻らない |
 | 管理 (管理者だけ) | しょぼいカレンダーの取得 (今すぐ取得・期間指定・中断)、ユーザーと招待コードの管理、取得履歴 |
 
-- 視聴済み・視聴中断の作品は、カレンダー・未視聴・通知・ICS に出ません。
+- 視聴済み・視聴中断の作品は、カレンダー・未視聴・通知に出ません。
 - 編集した話は「修正済」になり、再取得で上書きされません。「取得値に戻す」で戻せます。削除した話は「復元」できます。
 - 取得データにない作品は、「手動で作品を追加」で登録します。先の話数が未登録の作品は、「間隔で話を作成」で話を作ります。作成した話は予測で、実データが入ると置き換わります。
-- **ICS 購読**: アカウント →「カレンダー購読URL」に、自分専用の URL (`/calendar.ics?token=...`) が出ます。`&unwatched_only=true` を付けると、未視聴だけになります。漏れたときは、同じ画面で作り直せます。
 
 ## ユーザーと権限
 
 | | 管理者 | 一般 |
 |---|---|---|
-| 自分の登録作品・視聴記録・通知・購読 URL | ○ | ○ |
+| 自分の登録作品・視聴記録・通知 | ○ | ○ |
 | 「管理」タブ (取得操作・取得履歴・ユーザーと招待コードの管理) | ○ | × (API も 403) |
 
 - **データ**: 登録作品・視聴記録・通知はユーザーごとに別々です。しょぼいカレンダーから取得した作品は、全員で共有します。
@@ -148,7 +147,7 @@ Rust 1.85 以上が必要です。画面 (`app/static/`) はビルド時にバ�
 | GET/POST | `/api/auth/setup` | 最初の管理者の登録待ちか／登録 (ユーザーがいない間だけ) |
 | POST | `/api/auth/login` / `register` / `logout` / `logout_others` | ログイン (`otp` なしで2段階認証が必要なら `{totp_required:true}`)／招待コードでの登録／ログアウト／ほかの端末をログアウト |
 | POST | `/api/auth/totp/setup` / `enable` / `disable` | 2段階認証の設定・有効化・無効化 |
-| GET/POST | `/api/auth/me` / `password` / `ics_token` | 自分の情報／パスワード変更／購読 URL の作り直し |
+| GET/POST | `/api/auth/me` / `password` | 自分の情報／パスワード変更 |
 | GET/DELETE | `/api/auth/sessions` / `/api/auth/sessions/{id}` | ログイン中の端末の一覧／1つをログアウト |
 | GET/POST/DELETE | `/api/invites` | 招待コードの一覧・発行・取り消し (admin) |
 | GET/PATCH/DELETE | `/api/users` | ユーザー管理 (admin) |
@@ -165,7 +164,6 @@ Rust 1.85 以上が必要です。画面 (`app/static/`) はビルド時にバ�
 | POST | `/api/episodes/{id}/revert` | 取得値に戻す |
 | GET/POST | `/api/push/{key,settings,subscribe,unsubscribe,test}` | 通知の購読と設定 |
 | GET | `/api/calendar?start=&end=` / `/api/backlog` | 期間内の話／配信済みで未視聴の話 |
-| GET | `/calendar.ics?token=` | iCalendar (ユーザーごと) |
 
 ## 連絡先
 

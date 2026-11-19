@@ -162,8 +162,6 @@ function applyMe(me) {
   $('#account-btn').title = `${me.username}（${me.admin ? '管理者' : '一般'}）のアカウント`;
   $$('.admin-only').forEach(el => { el.hidden = !me.admin; });
   if (!me.admin && state.tab === 'admin') state.tab = 'calendar'; // 一般ユーザーには管理タブを開かせない
-  const ics = $('a[href^="/calendar.ics"]');
-  if (ics) ics.href = `/calendar.ics?token=${encodeURIComponent(me.ics_token)}`;
 }
 
 async function doLogout() {
@@ -243,21 +241,6 @@ async function totpDialog() {
   });
 }
 
-async function icsDialog() {
-  const url = `${location.origin}/calendar.ics?token=${encodeURIComponent(state.me.ics_token)}`;
-  const r = await formDialog({
-    title: 'カレンダー購読URL', submit: '閉じる',
-    html: `<p class="muted small">Googleカレンダーなどで購読できる、あなた専用のURLです。URLを知っている人は予定を見られるので、人に教えないでください（<code>&amp;unwatched_only=true</code> を付けると未視聴のみ）。</p>
-      <input class="copyurl" readonly value="${esc(url)}" aria-label="購読URL">`,
-    extra: [{ label: 'URLを作り直す', value: 'regen', cls: 'danger' }],
-    setup: dlg => $('.copyurl', dlg).addEventListener('focus', ev => ev.target.select()),
-  });
-  if (r.action !== 'regen') return;
-  if (!await confirmDialog('URLを作り直しますか？今の購読URLは使えなくなります。', '作り直す')) return;
-  applyMe(await api('/api/auth/ics_token', { method: 'POST' }));
-  toast('購読URLを作り直しました');
-  await icsDialog();
-}
 
 /* ============================================================ 管理タブ（管理者だけ）: ユーザーと招待 */
 async function renderUsersPanel() {
@@ -348,7 +331,7 @@ async function renderAdmin() {
 
 async function accountDialog() {
   const me = state.me;
-  const acts = [['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['ics', 'カレンダー購読URL'], ['sessions', 'ログイン中の端末']];
+  const acts = [['password', 'パスワード変更'], ['totp', `2段階認証（${me.totp_enabled ? 'オン' : 'オフ'}）`], ['sessions', 'ログイン中の端末']];
   const r = await formDialog({
     title: 'アカウント', submit: '閉じる',
     html: `<p><strong>${esc(me.username)}</strong> <span class="badge">${me.admin ? '管理者' : '一般'}</span></p>
@@ -358,7 +341,6 @@ async function accountDialog() {
   });
   if (r.action === 'password') await passwordDialog();
   else if (r.action === 'totp') await totpDialog();
-  else if (r.action === 'ics') await icsDialog();
   else if (r.action === 'sessions') await sessionsDialog();
   else if (r.action === 'logout') await doLogout();
 }
@@ -940,13 +922,16 @@ async function trackAction(t, act) {
   } else if (act === 'archive') {
     await api(`/api/tracks/${t.id}/archive`, { method: 'POST' });
     state.catalog = null;
+    closeTrack(t.id);
     toast(`「${t.display_title}」を視聴済みに移しました`);
   } else if (act === 'drop') {
     await api(`/api/tracks/${t.id}/drop`, { method: 'POST' });
     state.catalog = null;
+    closeTrack(t.id);
     toast(`「${t.display_title}」を視聴中断に移しました`);
   } else if (act === 'unarchive') {
     await api(`/api/tracks/${t.id}/unarchive`, { method: 'POST' });
+    closeTrack(t.id);
     toast(`「${t.display_title}」を登録作品に戻しました`);
   } else if (act === 'del') {
     if (!await confirmDialog(`「${t.display_title}」の登録を解除しますか？視聴記録も削除されます。`, '解除')) return false;
@@ -955,6 +940,12 @@ async function trackAction(t, act) {
     toast('登録を解除しました');
   }
   return true;
+}
+
+// 別のタブへ移した作品は、移った先で開いたままにならないよう閉じた状態にする
+function closeTrack(id) {
+  state.openTracks.delete(id);
+  store.set('openTracks', [...state.openTracks]);
 }
 
 async function manualAdd() {

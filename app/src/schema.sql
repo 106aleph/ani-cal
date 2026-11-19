@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS users(
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user')),
-  ics_token TEXT NOT NULL,              -- /calendar.ics?token=... の購読用
   created_at TEXT NOT NULL,
   totp_secret TEXT,                     -- 2段階認証（TOTP）の秘密鍵（Base32）。確認前の仮の鍵も入る
   totp_enabled INTEGER NOT NULL DEFAULT 0,

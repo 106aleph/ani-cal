@@ -234,30 +234,6 @@ fn handle(mut rq: Request) {
         if let Some(a) = found {
             return respond_asset(rq, a);
         }
-        if path == "/calendar.ics" {
-            // 購読ソフトは Cookie を持てないので、URL のトークンでも認証できる
-            if !auth::rate_ok("ics", &client_id(&rq), 120, 60) {
-                return respond_json(rq, 429, &util::msg("リクエストが多すぎます。しばらく待ってください"));
-            }
-            let who = query.get("token").and_then(|t| auth::from_ics_token(t)).or_else(|| session_token(&rq).and_then(|t| auth::from_session(&t)));
-            let Some(who) = who else {
-                return respond_json(rq, 401, &util::msg("ログインが必要です"));
-            };
-            auth::set_current(Some(who));
-            let res = catch_unwind(AssertUnwindSafe(|| api::ics(&query)));
-            auth::set_current(None);
-            let res = res.unwrap_or_else(|_| Err(util::err(500, "internal error")));
-            return match res {
-                Ok(s) => {
-                    let _ = rq.respond(
-                        with_sec(Response::from_string(s))
-                            .with_header(header("Content-Type", "text/calendar; charset=utf-8"))
-                            .with_header(header("Cache-Control", "no-store")),
-                    );
-                }
-                Err(e) => respond_json(rq, e.status, &util::msg(&e.detail)),
-            };
-        }
     }
 
     // CSRF 対策: 状態を変える要求は、同じオリジンからで、本文があれば JSON であること

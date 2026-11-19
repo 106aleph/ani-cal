@@ -35,7 +35,7 @@ const LOCK_SEC: u64 = 300;
 pub struct Cur {
     pub uid: i64,
     pub admin: bool,
-    pub session: Option<String>, // セッショントークンのハッシュ（ICS トークンでの認証では None）
+    pub session: Option<String>, // セッショントークンのハッシュ
 }
 
 thread_local! {
@@ -202,9 +202,9 @@ pub fn setup(body: &Value) -> Result<(Value, String), ApiErr> {
     let conn = db::connect();
     // 誰もいないときだけ入る（同時に2人が登録しようとしても、1人しか通らない）
     let n = conn.execute(
-        "INSERT INTO users(username, password_hash, role, ics_token, created_at)
-         SELECT ?,?,'admin',?,? WHERE NOT EXISTS (SELECT 1 FROM users)",
-        params![name, hash, random_token(), config::now_s()],
+        "INSERT INTO users(username, password_hash, role, created_at)
+         SELECT ?,?,'admin',? WHERE NOT EXISTS (SELECT 1 FROM users)",
+        params![name, hash, config::now_s()],
     )?;
     if n != 1 {
         return Err(err(409, "管理者は既に登録されています。ログインしてください"));
@@ -266,17 +266,6 @@ pub fn from_session(token: &str) -> Option<Cur> {
         let _ = conn.execute("UPDATE sessions SET last_used_at=? WHERE token_hash=?", params![config::fmt_dt(now), h]);
     }
     Some(Cur { uid, admin: role == "admin", session: Some(h) })
-}
-
-/// ICS 購読用のトークン（URL に入れる）から、ユーザーを調べる
-pub fn from_ics_token(token: &str) -> Option<Cur> {
-    if token.is_empty() {
-        return None;
-    }
-    let conn = db::connect();
-    conn.query_row("SELECT id, role FROM users WHERE ics_token=?", [token], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-        .ok()
-        .map(|(uid, role)| Cur { uid, admin: role == "admin", session: None })
 }
 
 fn create_session(conn: &Connection, uid: i64) -> String {
@@ -465,10 +454,10 @@ pub fn logout() {
 }
 
 fn me_json(conn: &Connection, uid: i64) -> Result<Value, ApiErr> {
-    let (name, role, ics): (String, String, String) = conn
-        .query_row("SELECT username, role, ics_token FROM users WHERE id=?", [uid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+    let (name, role): (String, String) = conn
+        .query_row("SELECT username, role FROM users WHERE id=?", [uid], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(|_| err(401, "ログインが必要です"))?;
-    Ok(json!({"id": uid, "username": name, "role": role, "admin": role == "admin", "ics_token": ics,
+    Ok(json!({"id": uid, "username": name, "role": role, "admin": role == "admin",
               "totp_enabled": totp_enabled(conn, uid), "needs_2fa": needs_2fa(uid, role == "admin")}))
 }
 
@@ -734,13 +723,6 @@ pub fn totp_disable(body: &Value) -> ApiResult {
     ok(json!({"ok": true}))
 }
 
-/// ICS 購読用トークンの作り直し（URL が漏れたとき用。古い URL は使えなくなる）
-pub fn regenerate_ics_token() -> ApiResult {
-    let conn = db::connect();
-    conn.execute("UPDATE users SET ics_token=? WHERE id=?", params![random_token(), uid()])?;
-    ok(me_json(&conn, uid())?)
-}
-
 // ---------------------------------------------------------------- ユーザー管理（admin のみ）
 fn admin_count(conn: &Connection) -> i64 {
     conn.query_row("SELECT COUNT(*) FROM users WHERE role='admin'", [], |r| r.get(0)).unwrap_or(0)
@@ -864,8 +846,8 @@ pub fn register(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
         return Err(err(409, "そのユーザー名は既に使われています"));
     }
     tx.execute(
-        "INSERT INTO users(username, password_hash, role, ics_token, created_at) VALUES (?,?,?,?,?)",
-        params![name, hash, role, random_token(), config::now_s()],
+        "INSERT INTO users(username, password_hash, role, created_at) VALUES (?,?,?,?)",
+        params![name, hash, role, config::now_s()],
     )?;
     let new_id = tx.last_insert_rowid();
     tx.execute("UPDATE invites SET used_by=? WHERE code=?", params![new_id, code])?;

@@ -1,7 +1,7 @@
 //! アニメ配信カレンダー API（Python 版 main.py と同じ入出力）
 use crate::util::*;
 use crate::{auth, config, db, notify, sync};
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use rusqlite::{named_params, params, params_from_iter, types::Value as SqlV, Connection};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -177,7 +177,6 @@ pub fn route(req: &Req) -> Option<ApiResult> {
         ("GET", ["api", "status"]) => status(),
         ("GET", ["api", "auth", "me"]) => auth::me(),
         ("POST", ["api", "auth", "password"]) => auth::change_password(b),
-        ("POST", ["api", "auth", "ics_token"]) => auth::regenerate_ics_token(),
         ("GET", ["api", "users"]) => auth::list_users(),
         ("POST", ["api", "auth", "logout_others"]) => auth::logout_others(),
         ("GET", ["api", "auth", "sessions"]) => auth::list_sessions(),
@@ -852,70 +851,4 @@ fn backlog() -> ApiResult {
         &format!("{} AND e.watched=0 AND e.start_at<=? ORDER BY e.start_at", EP_CAL_SELECT),
         params![auth::uid(), config::now_s()],
     )?))
-}
-
-// ---------------------------------------------------------------- ICS
-fn ics_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace(';', "\\;").replace(',', "\\,").replace('\n', "\\n")
-}
-
-fn ics_fold(line: &str) -> String {
-    let (mut out, mut buf): (Vec<String>, Vec<u8>) = (vec![], vec![]);
-    for ch in line.chars() {
-        let mut tmp = [0u8; 4];
-        let b = ch.encode_utf8(&mut tmp).as_bytes().to_vec();
-        if buf.len() + b.len() > 73 {
-            out.push(String::from_utf8(std::mem::take(&mut buf)).unwrap());
-            buf = b" ".to_vec();
-        }
-        buf.extend_from_slice(&b);
-    }
-    out.push(String::from_utf8(buf).unwrap());
-    out.join("\r\n")
-}
-
-pub fn ics(q: &HashMap<String, String>) -> Result<String, ApiErr> {
-    let unwatched_only = qbool(q, "unwatched_only")?;
-    let sql = format!("{}{} ORDER BY e.start_at", EP_CAL_SELECT, if unwatched_only { " AND e.watched=0" } else { "" });
-    let conn = db::connect();
-    let rows = db::query_json(&conn, &sql, [auth::uid()])?;
-    let tz = config::get().tz;
-    let utc = |s: &str| -> Option<String> {
-        let n = NaiveDateTime::parse_from_str(s, config::DT_FMT).ok()?;
-        let l = tz.from_local_datetime(&n).earliest().or_else(|| tz.from_local_datetime(&n).latest())?;
-        Some(l.with_timezone(&chrono::Utc).format("%Y%m%dT%H%M%SZ").to_string())
-    };
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let mut lines: Vec<String> = vec![
-        "BEGIN:VCALENDAR".into(), "VERSION:2.0".into(), "PRODID:-//anime-calendar//JA".into(),
-        "CALSCALE:GREGORIAN".into(), "X-WR-CALNAME:アニメ配信カレンダー".into(),
-    ];
-    for r in &rows {
-        let start = jstr(r, "start_at").unwrap_or("");
-        let Some(dtstart) = utc(start) else { continue };
-        let st = NaiveDateTime::parse_from_str(start, config::DT_FMT).unwrap();
-        let ed_s = match (jstr(r, "end_at"), jint(r, "edited").unwrap_or(0)) {
-            (Some(e), 0) if !e.is_empty() => e.to_string(),
-            _ => config::fmt_dt(st + Duration::minutes(30)),
-        };
-        let dtend = utc(&ed_s).unwrap_or_else(|| dtstart.clone());
-        let num = r["number"].as_f64().map(|n| format!(" #{}", notify::fmt_g(n))).unwrap_or_default();
-        let title = jstr(r, "title").unwrap_or("");
-        let platform = jstr(r, "platform").unwrap_or("");
-        let summary = format!("{}{}{}", if jint(r, "watched").unwrap_or(0) != 0 { "✓ " } else { "" }, title, num);
-        let desc = [platform, jstr(r, "subtitle").unwrap_or("")].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(" / ");
-        lines.extend([
-            "BEGIN:VEVENT".to_string(),
-            format!("UID:ep-{}@anime-calendar", jint(r, "id").unwrap_or(0)),
-            format!("DTSTAMP:{}", stamp),
-            format!("DTSTART:{}", dtstart),
-            format!("DTEND:{}", dtend),
-            ics_fold(&format!("SUMMARY:{}", ics_escape(&summary))),
-            ics_fold(&format!("DESCRIPTION:{}", ics_escape(&desc))),
-            ics_fold(&format!("LOCATION:{}", ics_escape(platform))),
-            "END:VEVENT".to_string(),
-        ]);
-    }
-    lines.push("END:VCALENDAR".into());
-    Ok(lines.join("\r\n") + "\r\n")
 }

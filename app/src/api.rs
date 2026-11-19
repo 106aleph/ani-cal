@@ -243,6 +243,11 @@ fn status() -> ApiResult {
         o.insert("covered_from".into(), json!(first.0));
         o.insert("covered_to".into(), json!(last.1));
     }
+    // 期間指定の今日の回数（上限の判定と同じ数え方。失敗した回も数える）
+    let today = config::now().format("%Y-%m-%d").to_string();
+    let used: i64 = conn.query_row("SELECT COUNT(*) FROM sync_log WHERE trigger='range' AND started_at >= ?", [today], |r| r.get(0))?;
+    o.insert("range_used".into(), json!(used));
+    o.insert("range_limit".into(), json!(config::get().range_sync_daily_limit));
     o.insert("counts".into(), Value::Object(counts));
     o.insert("now".into(), json!(config::now_s()));
     ok(v)

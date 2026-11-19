@@ -87,6 +87,7 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--a
 #sync-status { max-width: 36em; }
 #sync-status.running { color: var(--accent); }
 #sync-status.err { color: var(--danger); }
+#admin-range-quota.err { color: var(--danger); }
 
 main { padding: 16px 18px 48px; max-width: 1400px; margin: 0 auto; }
 .tab { display: none; }

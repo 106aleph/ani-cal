@@ -1037,6 +1037,10 @@ async function refreshStatus() {
   el.title = s.last_message || '';
   const ast = $('#admin-sync-status');
   ast.textContent = el.textContent; ast.className = el.className + ' small'; // 管理タブにも同じ状況を出す
+  // 期間指定は1日の回数に上限がある（超えると取得できない）ので、残りを示す
+  const rq = $('#admin-range-quota'), lim = s.range_limit || 0, used = s.range_used || 0;
+  rq.textContent = lim > 0 ? `期間指定: 今日 ${used} / ${lim} 回（${used >= lim ? '上限に達しました。明日以降に実行できます' : `残り ${lim - used} 回`}）` : `期間指定: 今日 ${used} 回（上限なし）`;
+  rq.className = 'small ' + (lim > 0 && used >= lim ? 'err' : 'muted');
   $('#sync-btn').disabled = s.running;
   $('#sync-range-btn').disabled = s.running;
   // 中断は取得中だけ押せる。中断要求後（停止処理中）も、二重に押せないよう無効にする

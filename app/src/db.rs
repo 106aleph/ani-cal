@@ -8,9 +8,13 @@ pub type Result<T> = std::result::Result<T, rusqlite::Error>;
 const SCHEMA: &str = include_str!("schema.sql");
 
 pub fn connect() -> Connection {
-    let conn = Connection::open(&config::get().db_path).expect("DB を開けません");
+    let mut conn = Connection::open(&config::get().db_path).expect("DB を開けません");
     conn.busy_timeout(std::time::Duration::from_secs(30)).ok();
     conn.execute_batch("PRAGMA foreign_keys=ON").ok();
+    // 読んでから書くトランザクションを、最初から書き込みとして始める。
+    // 途中で書き込みに切り替えると、その間に他の接続が書き込んでいた場合、待ち時間（busy_timeout）が効かず、
+    // 「database is locked」で即失敗する。最初から書き込みの順番を待てば、待ち時間のぶんだけ待って通る
+    conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
     conn
 }
 

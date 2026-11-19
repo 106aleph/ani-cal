@@ -194,7 +194,7 @@ fn value_of(v: ValueRef) -> Value {
 /// 列名をキーにした JSON オブジェクト（Python の dict(row) と同じ形）
 pub fn row_json(row: &Row) -> Value {
     let mut m = Map::new();
-    for (i, name) in row.as_ref().column_names().iter().enumerate() {
+    for (i, name) in row.as_ref().column_names().enumerate() {
         m.insert(name.to_string(), value_of(row.get_ref(i).unwrap_or(ValueRef::Null)));
     }
     Value::Object(m)

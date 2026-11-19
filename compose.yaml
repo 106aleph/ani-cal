@@ -33,3 +33,9 @@ services:
       - no-new-privileges:true
     pids_limit: 256
     mem_limit: 512m
+    # ログが溜まり続けてディスクが埋まらないようにする（10MB × 3ファイルまで。古い行から消える）
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

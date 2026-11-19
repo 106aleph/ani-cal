@@ -273,7 +273,7 @@ async function renderUsersPanel() {
   $('#admin-users').innerHTML = us.map(u => { const last = u.role === 'admin' && admins <= 1; return `<div class="urow" data-id="${u.id}" data-name="${esc(u.username)}">
       <div class="un"><strong>${esc(u.username)}</strong>${u.id === state.me.id ? ' <span class="badge">自分</span>' : ''}${last ? ' <span class="badge">最後の管理者</span>' : ''}
         <div class="muted small">登録作品 ${u.tracks} 件${u.totp_enabled ? '・2段階認証オン' : '・2段階認証オフ'}</div>
-        <div class="muted small">登録 ${esc((u.created_at || '').replace('T', ' '))}・最終ログイン ${u.last_login_at ? esc(u.last_login_at.replace('T', ' ')) : '記録なし'}</div></div>
+        <div class="muted small">登録 ${esc((u.created_at || '').replace('T', ' '))}・最終ログイン ${u.last_login_at ? esc(u.last_login_at.replace('T', ' ')) : '記録なし'}・最終利用 ${u.last_used_at ? esc(u.last_used_at.replace('T', ' ')) : '記録なし'}</div></div>
       <select data-role aria-label="権限" ${last ? 'disabled title="最後の管理者の権限は変更できません。先にほかのユーザーを管理者にしてください"' : ''}>
         <option value="user" ${u.role === 'user' ? 'selected' : ''}>一般</option>
         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理者</option></select>

@@ -750,6 +750,7 @@ fn user_json(conn: &Connection, id: i64) -> Result<Value, ApiErr> {
     let v = db::query_one_json(
         conn,
         "SELECT u.id, u.username, u.role, u.created_at, u.last_login_at, u.totp_enabled,
+           (SELECT MAX(COALESCE(s.last_used_at, s.created_at)) FROM sessions s WHERE s.user_id=u.id) AS last_used_at,
            (SELECT COUNT(*) FROM tracks t WHERE t.user_id=u.id) AS tracks
          FROM users u WHERE u.id=?",
         [id],
@@ -763,6 +764,7 @@ pub fn list_users() -> ApiResult {
     ok(Value::Array(db::query_json(
         &conn,
         "SELECT u.id, u.username, u.role, u.created_at, u.last_login_at, u.totp_enabled,
+           (SELECT MAX(COALESCE(s.last_used_at, s.created_at)) FROM sessions s WHERE s.user_id=u.id) AS last_used_at,
            (SELECT COUNT(*) FROM tracks t WHERE t.user_id=u.id) AS tracks
          FROM users u ORDER BY u.id",
         [],

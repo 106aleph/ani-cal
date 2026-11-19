@@ -1033,7 +1033,9 @@ async function refreshStatus() {
     el.textContent = `取得エラー: ${s.last_error}`;
     el.className = 'err';
   } else {
-    el.textContent = s.last_success ? `最終取得 ${s.last_success.replace('T', ' ')}` : '未取得';
+    el.textContent = s.last_success
+      ? `最終取得 ${s.last_success.replace('T', ' ')}${s.covered_from ? `（取得済み ${s.covered_from} 〜 ${s.covered_to}）` : ''}`
+      : '未取得';
     el.className = 'muted';
   }
   el.title = s.last_message || '';

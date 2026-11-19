@@ -238,6 +238,12 @@ fn status() -> ApiResult {
     let o = v.as_object_mut().unwrap();
     o.insert("last_success".into(), db::get_meta(&conn, "last_success").map(Value::from).unwrap_or(Value::Null));
     o.insert("auto_paused".into(), json!(db::get_meta(&conn, "auto_paused").as_deref() == Some("1")));
+    // 取得済みの期間の全体（最初の開始〜最後の終了。間の未取得は含めて示さない）。内訳は管理者の取得履歴で見る
+    let cov = db::get_coverage(&conn);
+    if let (Some(first), Some(last)) = (cov.first(), cov.last()) {
+        o.insert("covered_from".into(), json!(first.0));
+        o.insert("covered_to".into(), json!(last.1));
+    }
     o.insert("counts".into(), Value::Object(counts));
     o.insert("now".into(), json!(config::now_s()));
     ok(v)

@@ -25,6 +25,8 @@ pub struct Config {
     pub range_sync_daily_limit: i64,
     /// 受け付けるホスト名（Host ヘッダ）。空なら制限しない。127.0.0.1 / localhost は常に許可
     pub allowed_hosts: Vec<String>,
+    /// X-Forwarded-For / X-Forwarded-Proto を信用する、プロキシの接続元（IP か CIDR）。それ以外の接続元が付けた値は無視する
+    pub trusted_proxies: Vec<(std::net::IpAddr, u8)>,
     /// 2段階認証を必須にする対象: "off" / "admin" / "all"
     pub require_2fa: String,
     /// Cookie に Secure を常に付ける（プロキシが X-Forwarded-Proto を付けない構成用）
@@ -98,6 +100,7 @@ pub fn get() -> &'static Config {
             sync_chgids: intset("SYNC_CHGIDS", ""),
             sync_max_failures: int("SYNC_MAX_FAILURES", 5),
             range_sync_daily_limit: int("RANGE_SYNC_DAILY_LIMIT", 3),
+            trusted_proxies: parse_cidrs(&env("TRUSTED_PROXIES").unwrap_or_else(|| DEFAULT_TRUSTED_PROXIES.to_string())),
             allowed_hosts: env("ALLOWED_HOSTS")
                 .unwrap_or_default()
                 .split(',')
@@ -144,4 +147,62 @@ pub fn fmt_dt(dt: NaiveDateTime) -> String {
 
 pub fn now_s() -> String {
     fmt_dt(now())
+}
+
+/// 既定: 同じ機械（127.0.0.1）と、Docker・家庭内などの私的なアドレス。インターネットから直接来る接続は含まない
+const DEFAULT_TRUSTED_PROXIES: &str = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,fe80::/10";
+
+/// "1.2.3.4, 10.0.0.0/8, fc00::/7" のような一覧を読む。読めない項目は捨てる
+fn parse_cidrs(s: &str) -> Vec<(std::net::IpAddr, u8)> {
+    s.split(',')
+        .filter_map(|p| {
+            let p = p.trim();
+            let (ip, bits) = match p.split_once('/') {
+                Some((a, b)) => (a, Some(b.parse::<u8>().ok()?)),
+                None => (p, None),
+            };
+            let ip: std::net::IpAddr = ip.parse().ok()?;
+            let max = if ip.is_ipv4() { 32 } else { 128 };
+            let bits = bits.unwrap_or(max);
+            (bits <= max).then_some((ip, bits))
+        })
+        .collect()
+}
+
+/// ip が、一覧のどれかの範囲に入るか（IPv4 射影の IPv6 アドレスは IPv4 として見る）
+pub fn ip_in(list: &[(std::net::IpAddr, u8)], ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    };
+    list.iter().any(|&(net, bits)| match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(a)) => {
+            let m = if bits == 0 { 0 } else { u32::MAX << (32 - bits as u32) };
+            u32::from(n) & m == u32::from(a) & m
+        }
+        (IpAddr::V6(n), IpAddr::V6(a)) => {
+            let m = if bits == 0 { 0 } else { u128::MAX << (128 - bits as u32) };
+            u128::from(n) & m == u128::from(a) & m
+        }
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_proxy_ranges() {
+        let d = parse_cidrs(DEFAULT_TRUSTED_PROXIES);
+        for ok in ["127.0.0.1", "::1", "172.18.0.1", "10.1.2.3", "192.168.0.5", "::ffff:172.17.0.1", "fd00::1"] {
+            assert!(ip_in(&d, ok.parse().unwrap()), "{}", ok);
+        }
+        for ng in ["8.8.8.8", "172.32.0.1", "100.64.0.1", "2001:db8::1", "::ffff:8.8.8.8"] {
+            assert!(!ip_in(&d, ng.parse().unwrap()), "{}", ng);
+        }
+        assert!(!ip_in(&parse_cidrs(""), "127.0.0.1".parse().unwrap())); // 空なら、だれも信用しない
+        assert!(ip_in(&parse_cidrs("203.0.113.7, bad, 1.2.3.4/99"), "203.0.113.7".parse().unwrap()));
+    }
 }

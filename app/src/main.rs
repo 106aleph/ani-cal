@@ -105,15 +105,26 @@ fn same_origin(rq: &Request) -> bool {
     [req_header(rq, "Host"), req_header(rq, "X-Forwarded-Host")].into_iter().flatten().any(|h| h.eq_ignore_ascii_case(o))
 }
 
-/// 失敗回数・回数制限のための接続元。プロキシ（tailscale serve / funnel など）の後ろでは X-Forwarded-For を使い、無ければ直接の接続元。
-/// X-Forwarded-For は、クライアントが勝手に書き足せる。プロキシが追記する**いちばん右**の値だけを信用する
-/// （左側は偽装できる）。コンテナは 127.0.0.1 でしか待ち受けないので、直接アクセスできるのはプロキシだけ
+/// 直接の接続元が、信頼するプロキシか（既定は、同じ機械と私的なアドレスだけ。`TRUSTED_PROXIES` で変えられる）
+fn from_trusted_proxy(rq: &Request) -> bool {
+    rq.remote_addr().map(|a| config::ip_in(&config::get().trusted_proxies, a.ip())).unwrap_or(false)
+}
+
+/// 失敗回数・回数制限のための接続元。
+/// 信頼するプロキシ（tailscale serve・cloudflared など）から来た要求だけ、X-Forwarded-For を使う。
+/// それ以外（インターネットから直接届いた要求）は、X-Forwarded-For を無視して、直接の接続元を使う。
+/// X-Forwarded-For は、クライアントが勝手に書き足せるので、プロキシが追記する**いちばん右**の値だけを信用する
+/// （左側は偽装できる）。右端が IP アドレスとして読めないときは、プロキシ自身のアドレスにする
 fn client_id(rq: &Request) -> String {
-    req_header(rq, "X-Forwarded-For")
-        .and_then(|v| v.rsplit(',').next().map(|s| s.trim().chars().take(64).collect::<String>()))
-        .filter(|s| !s.is_empty())
-        .or_else(|| rq.remote_addr().map(|a| a.ip().to_string()))
-        .unwrap_or_default()
+    let peer = rq.remote_addr().map(|a| a.ip());
+    if from_trusted_proxy(rq) {
+        // ヘッダが複数あっても、最後に追記された値を見る
+        let last = rq.headers().iter().filter(|h| h.field.equiv("X-Forwarded-For")).last().map(|h| h.value.as_str().to_string());
+        if let Some(ip) = last.and_then(|v| v.rsplit(',').next().and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())) {
+            return ip.to_string();
+        }
+    }
+    peer.map(|ip| ip.to_string()).unwrap_or_default()
 }
 
 fn is_json(rq: &Request) -> bool {
@@ -189,7 +200,9 @@ fn session_token(rq: &Request) -> Option<String> {
 /// HTTPS 終端のプロキシ（tailscale serve / funnel など）の後ろにいるときは、Cookie に Secure を付ける。
 /// プロキシが X-Forwarded-Proto を付けない構成では、COOKIE_SECURE=1 で常に Secure にする
 fn is_https(rq: &Request) -> bool {
-    config::get().cookie_secure || req_header(rq, "X-Forwarded-Proto").map(|v| v.to_lowercase().contains("https")).unwrap_or(false)
+    // X-Forwarded-Proto も、信頼するプロキシが付けたものだけを見る
+    config::get().cookie_secure
+        || (from_trusted_proxy(rq) && req_header(rq, "X-Forwarded-Proto").map(|v| v.to_lowercase().contains("https")).unwrap_or(false))
 }
 
 fn respond_asset(rq: Request, a: &Asset) {

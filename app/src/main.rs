@@ -290,7 +290,7 @@ fn handle(mut rq: Request) {
     {
         return respond_json(rq, 429, &util::msg("リクエストが多すぎます。しばらく待ってからやり直してください"));
     }
-    // ボットプロテクション（Turnstile）は、失敗の回数にも数えず、パスワードの計算にも入る前に済ませる
+    // Botプロテクション（Turnstile）は、失敗の回数にも数えず、パスワードの計算にも入る前に済ませる
     if method == "POST" && matches!(path.as_str(), "/api/auth/login" | "/api/auth/register") {
         if let Err(e) = turnstile::check(&body, &client_id(&rq)) {
             return respond_json(rq, e.status, &util::msg(&e.detail));
@@ -381,7 +381,7 @@ fn main() {
     db::init();
     turnstile::load();
     if turnstile::enabled() {
-        info!("app", "Cloudflare Turnstile: 有効（ログイン・新規登録でボットプロテクション）");
+        info!("app", "Cloudflare Turnstile: 有効（ログイン・新規登録でBotプロテクション）");
     }
     db::restrict_permissions();
     if cfg.syoboi_ua_url.is_empty() {

@@ -680,10 +680,17 @@ pub fn totp_enable(body: &Value) -> ApiResult {
         .query_row("SELECT totp_secret FROM users WHERE id=? AND totp_enabled=0", [c.uid], |r| r.get(0))
         .map_err(|_| err(409, "2段階認証は既にオンです"))?;
     let secret = secret.ok_or_else(|| err(409, "先に設定を始めてください"))?;
+    // 6桁の総当たりを防ぐ。オフにするときと同じ失敗の数え方（ユーザーごとに5回で、5分間止める）
+    let okey = [(format!("\u{0}otp|{}", c.uid), MAX_FAILS)];
+    if let Some(s) = locked(&okey) {
+        return Err(err(429, format!("認証コードの確認に失敗した回数が多すぎます。{}分ほど待ってからやり直してください", s.div_ceil(60))));
+    }
     let Some(step) = totp_match(&secret, &code, 0) else {
+        record_fail(&okey);
         std::thread::sleep(std::time::Duration::from_millis(300));
         return Err(err(400, "認証コードが違います。アプリに表示されている6桁を入力してください"));
     };
+    clear_fails(&okey);
     conn.execute("UPDATE users SET totp_enabled=1, totp_last_step=? WHERE id=?", params![step, c.uid])?;
     conn.execute("DELETE FROM recovery_codes WHERE user_id=?", [c.uid])?;
     let mut codes = Vec::new();

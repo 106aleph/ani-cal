@@ -16,14 +16,14 @@ jobs:
       - name: イメージをビルド
         run: docker build -t ani-cal:scan app
       - name: イメージを調べる（OS のパッケージ）
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ani-cal:scan
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: 依存クレートを調べる（Cargo.lock）
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: app

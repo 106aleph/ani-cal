@@ -99,7 +99,7 @@ use std::io::Error as IoError;
 use std::io::ErrorKind as IoErrorKind;
 use std::io::Result as IoResult;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -291,8 +291,10 @@ impl Server {
 
             log::debug!("Running accept thread");
             while !inside_close_trigger.load(Relaxed) {
+                let mut peer_ip: Option<std::net::IpAddr> = None;
                 let new_client = match server.accept() {
-                    Ok((sock, _)) => {
+                    Ok((sock, addr)) => {
+                        peer_ip = addr.map(|a| a.ip());
                         use util::RefinedTcpStream;
                         let (read_closable, write_closable) = match ssl {
                             None => RefinedTcpStream::new(sock),
@@ -320,12 +322,10 @@ impl Server {
                     Ok(client) => {
                         // 同時につなげる数に上限を付ける（接続ごとにスレッドを作るため、上限が無いと、スレッドを使い果たされる）。
                         // 超えた接続は、すぐに閉じる
-                        if ACTIVE_CONNECTIONS.fetch_add(1, Relaxed) >= MAX_CONNECTIONS {
-                            ACTIVE_CONNECTIONS.fetch_sub(1, Relaxed);
+                        let Some(guard) = ConnectionGuard::acquire(peer_ip) else {
                             drop(client);
                             continue;
-                        }
-                        let guard = ConnectionGuard;
+                        };
                         let messages = inside_messages.clone();
                         let mut client = Some(client);
                         tasks_pool.spawn(Box::new(move || {
@@ -453,14 +453,89 @@ impl Drop for Server {
     }
 }
 
-/// 同時につなげる接続数の上限と、いまの数
-const MAX_CONNECTIONS: usize = 192;
-static ACTIVE_CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// 同時につなげる接続数の上限（接続ごとにスレッドを作るので、無いと、スレッドを使い果たされる）。
+/// - 全体: ループバック以外の接続の合計（既定 192）
+/// - 同じ接続元（IP）ごと: 既定 48。1つの端末が、全部の枠を埋めてしまえないようにする
+/// - ループバック（同じ機械のプロキシ・ヘルスチェック）は、上の数に数えず、別枠（LOOPBACK_RESERVED）を使う。
+///   外からの接続で、全体の枠が埋まっても、ヘルスチェックや同じ機械のプロキシが、締め出されないようにする
+/// 超えた接続は、すぐに閉じる。環境変数 MAX_CONNECTIONS（全体）と MAX_CONNECTIONS_PER_IP（接続元ごと）で変えられる
+const LOOPBACK_RESERVED: usize = 64;
+
+fn env_limit(name: &str, default: usize) -> usize {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).filter(|n: &usize| *n > 0).unwrap_or(default)
+}
+
+struct Limits {
+    total: AtomicUsize,
+    loopback: AtomicUsize,
+    per_ip: std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>,
+    max_total: usize,
+    max_per_ip: usize,
+}
+
+fn limits() -> &'static Limits {
+    static L: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
+    L.get_or_init(|| Limits {
+        total: AtomicUsize::new(0),
+        loopback: AtomicUsize::new(0),
+        per_ip: Default::default(),
+        max_total: env_limit("MAX_CONNECTIONS", 192),
+        max_per_ip: env_limit("MAX_CONNECTIONS_PER_IP", 48),
+    })
+}
 
 /// 接続を処理するスレッドが終わったときに、数を戻す
-struct ConnectionGuard;
+struct ConnectionGuard {
+    ip: Option<std::net::IpAddr>,
+    loopback: bool,
+}
+
+impl ConnectionGuard {
+    /// 上限の中なら、枠を取って、返す。上限を超えていたら None
+    fn acquire(ip: Option<std::net::IpAddr>) -> Option<ConnectionGuard> {
+        let l = limits();
+        let loopback = ip.is_some_and(|i| i.is_loopback() || matches!(i, std::net::IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())));
+        if loopback {
+            if l.loopback.fetch_add(1, Relaxed) >= LOOPBACK_RESERVED {
+                l.loopback.fetch_sub(1, Relaxed);
+                return None;
+            }
+            return Some(ConnectionGuard { ip, loopback });
+        }
+        if l.total.fetch_add(1, Relaxed) >= l.max_total {
+            l.total.fetch_sub(1, Relaxed);
+            return None;
+        }
+        if let Some(ip) = ip {
+            let mut m = l.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+            let n = m.entry(ip).or_insert(0);
+            if *n >= l.max_per_ip {
+                drop(m);
+                l.total.fetch_sub(1, Relaxed);
+                return None;
+            }
+            *n += 1;
+        }
+        Some(ConnectionGuard { ip, loopback })
+    }
+}
+
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        ACTIVE_CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        let l = limits();
+        if self.loopback {
+            l.loopback.fetch_sub(1, Relaxed);
+            return;
+        }
+        l.total.fetch_sub(1, Relaxed);
+        if let Some(ip) = self.ip {
+            let mut m = l.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(n) = m.get_mut(&ip) {
+                *n -= 1;
+                if *n == 0 {
+                    m.remove(&ip);
+                }
+            }
+        }
     }
 }

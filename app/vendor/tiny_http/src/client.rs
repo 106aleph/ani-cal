@@ -38,6 +38,9 @@ pub struct ClientConnection {
     // 読み残しの確認のために先に読んだ、次の要求の最初の1バイト
     pending_byte: Option<u8>,
 
+    // 要求の最初の1バイトが届いてから、ヘッダを読み終えるまでの期限
+    header_deadline: Option<std::time::Instant>,
+
     // true if the connection goes through SSL
     secure: bool,
 }
@@ -72,6 +75,7 @@ impl ClientConnection {
             no_more_requests: false,
             state: Default::default(),
             pending_byte: None,
+            header_deadline: None,
             secure,
         }
     }
@@ -90,6 +94,10 @@ impl ClientConnection {
         let mut prev_byte_was_cr = false;
 
         loop {
+            // ヘッダの読み取り全体の期限。1バイトずつ送り続ける相手でも、いつまでも居座れないようにする
+            if self.header_deadline.is_some_and(|d| std::time::Instant::now() > d) {
+                return Err(IoError::new(ErrorKind::TimedOut, "the request header took too long to arrive"));
+            }
             let byte = match self.pending_byte.take() {
                 Some(b) => Some(Ok(b)),
                 None => self.next_header_source.by_ref().bytes().next(),
@@ -119,6 +127,8 @@ impl ClientConnection {
     /// Blocks until the header has been read.
     fn read(&mut self) -> Result<Request, ReadError> {
         self.finish_previous().map_err(ReadError::ReadIoError)?;
+        // 次の要求の最初の1バイトが届いたので、ここから数える
+        self.header_deadline = Some(std::time::Instant::now() + HEADER_DEADLINE);
         let (method, path, version, headers) = {
             // reading the request line
             let (method, path, version) = {
@@ -155,6 +165,8 @@ impl ClientConnection {
 
             (method, path, version, headers)
         };
+
+        self.header_deadline = None;
 
         // building the writer for the request
         let writer = self.sink.next().unwrap();
@@ -391,3 +403,6 @@ impl ClientConnection {
 const MAX_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HEADERS: usize = 100;
+
+/// 要求の最初の1バイトが届いてから、ヘッダを読み終えるまでの、合計の制限時間（超えたら 408 で閉じる）
+const HEADER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);

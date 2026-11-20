@@ -29,6 +29,8 @@ const PUSH_HOSTS: [&str; 4] = ["fcm.googleapis.com", "push.services.mozilla.com"
 
 /// 1人が通知を登録できる端末の数
 const MAX_SUBS_PER_USER: i64 = 20;
+/// 1回の送信処理（30秒おき）で送る通知の最大数
+const MAX_SENDS_PER_RUN: usize = 300;
 
 static KEY: OnceLock<SecretKey> = OnceLock::new();
 static KEY_LOCK: Mutex<()> = Mutex::new(());
@@ -236,6 +238,12 @@ pub fn subscribe(body: &Value) -> ApiResult {
     if p256dh.is_empty() || auth.is_empty() {
         return Err(err(422, "購読情報が不正です"));
     }
+    // 保存する前に、鍵として読めるか確かめる（p256dh は P-256 の公開鍵、auth は16バイト）。不正な値は、送信のたびに失敗するだけになる
+    let key_ok = b64_decode(p256dh).and_then(|b| PublicKey::from_sec1_bytes(&b).ok()).is_some();
+    let auth_ok = b64_decode(auth).is_some_and(|b| b.len() == 16);
+    if !key_ok || !auth_ok {
+        return Err(err(422, "購読情報が不正です"));
+    }
     let conn = db::connect();
     // 別のユーザーが登録済みのエンドポイントは、鍵（その端末だけが持つ）が一致するときしか引き継げない
     let owner: Option<(Option<i64>, String, String)> = conn
@@ -400,6 +408,10 @@ pub fn notify_due() -> usize {
             .collect()
         };
         for r in rows {
+            // 1回（30秒おき）に送る件数の上限。話を大量に作られても、外部への送信が膨らみ続けないようにする。残りは次の回に送る
+            if sent >= MAX_SENDS_PER_RUN {
+                return sent;
+            }
             match send(&sub, &fmt_ep(&r, now), 600) {
                 Ok(()) => {}
                 Err(PushErr::Gone) => {

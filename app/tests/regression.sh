@@ -64,6 +64,13 @@ t=$(curl -s -o /dev/null -m 3 -w '%{time_total}' $B/api/health)
 chk "攻撃中も、1秒以内に応答する" "$(awk -v t="$t" 'BEGIN{print (t<1.0)?"fast":"slow"}')" fast
 wait "${DRIP[@]}"
 
+echo "M-4 読む本文（1KB を超える JSON）を1バイトずつ送り続ける接続が、ワーカーを占有しない"
+DRIP=(); for _ in $(seq 1 12); do ( exec 9<>/dev/tcp/127.0.0.1/$PORT; printf "POST /api/auth/login HTTP/1.1\r\n${H}Content-Type: application/json\r\nContent-Length: 5000\r\n\r\n" >&9; for _ in 1 2 3 4 5 6 7 8; do printf ' ' >&9 2>/dev/null; sleep 1; done ) & DRIP+=($!); done
+sleep 3
+t=$(curl -s -o /dev/null -m 3 -w '%{time_total}' $B/api/health)
+chk "攻撃中も、1秒以内に応答する" "$(awk -v t="$t" 'BEGIN{print (t<1.0)?"fast":"slow"}')" fast
+wait "${DRIP[@]}"
+
 echo "L-1 chunked で JSON 以外を送れない"
 chk "text/plain の chunked は 415" "$(code -b "$DIR/c1" -H 'Content-Type: text/plain' -H 'Transfer-Encoding: chunked' -d '{}' $B/api/sync)" 415
 

@@ -1,3 +1,9 @@
+/// この大きさまでの本文は、要求を処理するスレッド（ワーカー）に渡す前に、接続ごとのスレッドで受け取りきる。
+/// 遅く送ってくる相手に、ワーカーが待たされないようにするため。元は 1024 バイトだった（アプリの本文の上限に合わせた）
+const MAX_BUFFERED_BODY: usize = 256 * 1024;
+/// 上の本文を受け取りきるまでの、合計の制限時間
+const BODY_BUFFER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(15);
+
 use std::io::Error as IoError;
 use std::io::{self, Cursor, ErrorKind, Read, Write};
 
@@ -192,13 +198,19 @@ where
     } else if let Some(content_length) = content_length {
         if content_length == 0 {
             Box::new(io::empty()) as Box<dyn Read + Send + 'static>
-        } else if content_length <= 1024 && !expects_continue {
+        } else if content_length <= MAX_BUFFERED_BODY && !expects_continue {
             // if the content-length is small enough, we just read everything into a buffer
 
             let mut buffer = vec![0; content_length];
             let mut offset = 0;
+            // 受け取りきるまでの合計の制限時間。1バイトずつ送り続ける相手でも、いつまでも居座れないようにする
+            let deadline = std::time::Instant::now() + BODY_BUFFER_DEADLINE;
 
             while offset != content_length {
+                if std::time::Instant::now() > deadline {
+                    let err = IoError::new(ErrorKind::TimedOut, "the request body took too long to arrive");
+                    return Err(RequestCreationError::CreationIoError(err));
+                }
                 let read = source_data.read(&mut buffer[offset..])?;
                 if read == 0 {
                     // the socket returned EOF, but we were before the expected content-length

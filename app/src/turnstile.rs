@@ -156,6 +156,11 @@ fn valid_key(s: &str, max: usize) -> bool {
 /// シークレットキーは、空なら今のものを使う（サイトキーだけの変更用）
 pub fn save(body: &Value) -> ApiResult {
     let admin = auth::confirm_admin_password(body)?;
+    // ALLOWED_HOSTS が無いと、確認で照合できるのは、クライアントが送る Host だけになる（トークンの使い回しへの防御が弱い）。
+    // 公開するときに使うものなので、ホスト名を設定してからにしてもらう
+    if config::get().allowed_hosts.is_empty() {
+        return Err(err(422, "先に、サーバーの .env で ALLOWED_HOSTS（公開するホスト名）を設定して、再起動してください"));
+    }
     let m = body_obj(body);
     let site = opt_str(&m, "site_key")?.unwrap_or_default().trim().to_string();
     let given = opt_str(&m, "secret_key")?.unwrap_or_default().trim().to_string();
@@ -179,9 +184,11 @@ pub fn save(body: &Value) -> ApiResult {
     if has_code(&probe, "invalid-input-secret") || has_code(&probe, "missing-input-secret") {
         return Err(err(422, "シークレットキーが正しくありません。Cloudflare の Turnstile で確認してください"));
     }
-    let conn = db::connect();
-    db::set_meta(&conn, META_SITE, &site);
-    db::set_meta(&conn, META_SECRET, &secret);
+    // 2つを一緒に保存する（片方だけ保存されると、再起動のあと、だれもログインできなくなる）
+    db::set_metas(&[(META_SITE, &site), (META_SECRET, &secret)]).map_err(|e| {
+        warn!("auth", "turnstile save failed: {}", e);
+        err(500, "保存に失敗しました。もう一度お試しください")
+    })?;
     set_keys(Some(Keys { site, secret }));
     info!("auth", "turnstile enabled by admin {}", auth::clean(&admin));
     ok(status_json())
@@ -190,9 +197,10 @@ pub fn save(body: &Value) -> ApiResult {
 /// 無効にする（パスワードの確認が要る）
 pub fn disable(body: &Value) -> ApiResult {
     let admin = auth::confirm_admin_password(body)?;
-    let conn = db::connect();
-    db::set_meta(&conn, META_SITE, "");
-    db::set_meta(&conn, META_SECRET, "");
+    db::set_metas(&[(META_SITE, ""), (META_SECRET, "")]).map_err(|e| {
+        warn!("auth", "turnstile disable failed: {}", e);
+        err(500, "保存に失敗しました。もう一度お試しください")
+    })?;
     set_keys(None);
     info!("auth", "turnstile disabled by admin {}", auth::clean(&admin));
     ok(status_json())
@@ -224,8 +232,10 @@ pub fn cli(args: &[String]) -> i32 {
             0
         }
         "off" => {
-            db::set_meta(&conn, META_SITE, "");
-            db::set_meta(&conn, META_SECRET, "");
+            if db::set_metas(&[(META_SITE, ""), (META_SECRET, "")]).is_err() {
+                eprintln!("更新に失敗しました");
+                return 1;
+            }
             println!("Turnstile を無効にしました。稼働中のアプリには、10秒ほどで反映されます。");
             info!("auth", "turnstile disabled by CLI");
             0

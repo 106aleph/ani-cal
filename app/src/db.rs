@@ -214,3 +214,13 @@ pub fn query_one_json(conn: &Connection, sql: &str, params: impl rusqlite::Param
     let mut v = query_json(conn, sql, params)?;
     Ok(if v.is_empty() { None } else { Some(v.remove(0)) })
 }
+
+/// 複数の設定を、まとめて（途中で失敗したら、全部やめて）保存する。エラーは返す
+pub fn set_metas(pairs: &[(&str, &str)]) -> Result<()> {
+    with_tx(|conn| {
+        for (k, v) in pairs {
+            conn.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [k, v])?;
+        }
+        Ok::<(), rusqlite::Error>(())
+    })
+}

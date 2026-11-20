@@ -1,7 +1,18 @@
-# Dockerfile のベースイメージ（digest で固定している）を、新しい版に更新する PR を作る
+# 依存を、新しい版に更新する PR を、毎週作る
+# - docker: Dockerfile のベースイメージ（digest で固定している）
+# - cargo: app/Cargo.toml の依存（vendor/tiny_http は対象外。.github/workflows/test.yml が、上流の新版を確かめる）
+# - github-actions: ワークフローの Action（SHA で固定している）
 version: 2
 updates:
   - package-ecosystem: docker
     directory: /app
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /app
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
     schedule:
       interval: weekly

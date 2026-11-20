@@ -144,6 +144,7 @@
       <label class="field"><span>ユーザー名</span><input id="login-user" name="username" autocomplete="username" autocapitalize="none" required></label>
       <label class="field"><span>パスワード</span><input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
       <label class="field reg-only" hidden><span>パスワード（確認）</span><input id="login-pass2" type="password" autocomplete="new-password"></label>
+      <label class="field" id="login-setup-row" hidden><span>セットアップコード</span><input id="login-setup" name="setup_token" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="サーバーのログに出ているコード"></label>
       <label class="field" id="login-otp-row" hidden><span>認証コード</span><input id="login-otp" name="otp" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="123456"></label>
       <div id="login-turnstile" hidden></div>
       <p id="login-err" class="login-err" role="alert"></p>

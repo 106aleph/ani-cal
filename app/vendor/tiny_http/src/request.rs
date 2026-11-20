@@ -135,6 +135,7 @@ pub fn new_request<R, W>(
     remote_addr: Option<SocketAddr>,
     mut source_data: R,
     writer: W,
+    state: Option<std::sync::Arc<crate::util::ConnState>>,
 ) -> Result<Request, RequestCreationError>
 where
     R: Read + Send + 'static,
@@ -212,13 +213,16 @@ where
 
             Box::new(Cursor::new(buffer)) as Box<dyn Read + Send + 'static>
         } else {
-            let (data_reader, _) = EqualReader::new(source_data, content_length); // TODO:
+            let data_reader = match state {
+                Some(state) => EqualReader::with_state(source_data, content_length, state),
+                None => EqualReader::new(source_data, content_length).0,
+            };
             Box::new(FusedReader::new(data_reader)) as Box<dyn Read + Send + 'static>
         }
     } else if transfer_encoding.is_some() {
         // if a transfer-encoding was specified, then "chunked" is ALWAYS applied
         // over the message (RFC2616 #3.6)
-        Box::new(crate::util::DrainOnDrop(FusedReader::new(Decoder::new(source_data)))) as Box<dyn Read + Send + 'static>
+        Box::new(crate::util::DrainOnDrop::new(FusedReader::new(Decoder::new(source_data)), state)) as Box<dyn Read + Send + 'static>
     } else {
         // if we have neither a Content-Length nor a Transfer-Encoding,
         // assuming that we have no data

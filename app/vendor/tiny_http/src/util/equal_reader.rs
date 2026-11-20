@@ -15,6 +15,8 @@ where
     reader: R,
     size: usize,
     last_read_signal: Sender<IoResult<()>>,
+    // あれば、読み残しは読み捨てず、接続の持ち主（接続ごとのスレッド）に任せる
+    state: Option<std::sync::Arc<super::ConnState>>,
 }
 
 impl<R> EqualReader<R>
@@ -28,9 +30,17 @@ where
             reader,
             size,
             last_read_signal: tx,
+            state: None,
         };
 
         (r, rx)
+    }
+
+    /// 読み残しを、読み捨てずに `state` に記録する版（接続ごとのスレッドが、上限と期限つきで読み捨てる）
+    pub fn with_state(reader: R, size: usize, state: std::sync::Arc<super::ConnState>) -> EqualReader<R> {
+        let (mut r, _) = Self::new(reader, size);
+        r.state = Some(state);
+        r
     }
 }
 
@@ -64,6 +74,10 @@ where
     R: Read,
 {
     fn drop(&mut self) {
+        if let Some(state) = &self.state {
+            state.drain_remaining.store(self.size, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
         let mut remaining_to_read = self.size;
 
         while remaining_to_read > 0 {

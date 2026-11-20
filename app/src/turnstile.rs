@@ -99,7 +99,8 @@ fn has_code(v: &Value, code: &str) -> bool {
 
 /// ログイン・登録の本文にある `turnstile`（確認トークン）を検証する。無効な設定なら何もしない。
 /// 失敗したときは通さない（Cloudflare に届かないときも同じ）。
-pub fn check(body: &Value, client: &str) -> Result<(), ApiErr> {
+/// `host`: この要求の Host（ポートなし・小文字）。ALLOWED_HOSTS が未設定のときは、これと照合する
+pub fn check(body: &Value, client: &str, host: &str) -> Result<(), ApiErr> {
     let Some(k) = keys() else { return Ok(()) };
     let token = opt_str(&body_obj(body), "turnstile").ok().flatten().unwrap_or_default();
     if token.is_empty() || token.len() > MAX_TOKEN_LEN {
@@ -120,13 +121,17 @@ pub fn check(body: &Value, client: &str) -> Result<(), ApiErr> {
         return Err(err(400, "Botプロテクションの確認に失敗しました。もう一度お試しください"));
     }
     // 別のサイトで取られたトークンの使い回しを防ぐ（ALLOWED_HOSTS があるときだけ照合できる）
+    // ALLOWED_HOSTS があればそれと、無ければ、この要求の Host と照合する
     let allowed = &config::get().allowed_hosts;
-    if !allowed.is_empty() {
-        let host = resp["hostname"].as_str().unwrap_or("").to_lowercase();
-        if !allowed.contains(&host) && host != "127.0.0.1" && host != "localhost" {
-            warn!("auth", "turnstile hostname mismatch: ip={} host={}", auth::clean(client), auth::clean(&host));
-            return Err(err(400, "Botプロテクションの確認に失敗しました。もう一度お試しください"));
-        }
+    let got = resp["hostname"].as_str().unwrap_or("").to_lowercase();
+    let good = if allowed.is_empty() {
+        !host.is_empty() && got == host
+    } else {
+        allowed.contains(&got) || got == "127.0.0.1" || got == "localhost"
+    };
+    if !good {
+        warn!("auth", "turnstile hostname mismatch: ip={} widget_host={} request_host={}", auth::clean(client), auth::clean(&got), auth::clean(host));
+        return Err(err(400, "Botプロテクションの確認に失敗しました。もう一度お試しください"));
     }
     Ok(())
 }

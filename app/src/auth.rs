@@ -173,7 +173,7 @@ fn check_role(role: &str) -> Result<(), ApiErr> {
 pub fn bootstrap(conn: &Connection) {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0)).unwrap_or(0);
     if n == 0 {
-        warn!("auth", "ユーザーがまだいません。最初に画面を開いた人が、管理者として登録できます。早めに登録してください");
+        warn!("auth", "ユーザーがまだいません。最初の管理者は、登録画面で、次のセットアップコードを入力して登録します（サーバーの `docker compose logs` に出ます）: {}", setup_token());
     }
     adopt_legacy(conn);
 }
@@ -194,6 +194,18 @@ fn adopt_legacy(conn: &Connection) {
 /// 最初の管理者の登録は、同じ機械・同じネットワーク（ループバックと私的なアドレス）からの接続だけに限る。
 /// 公開したあとで、見知らぬ人に先に登録されて、管理者を奪われるのを防ぐ。
 /// 接続元は、信頼するプロキシの後ろでは X-Forwarded-For の右端（`client_id`）。Docker 経由でも、ホストからは私的なアドレスで届く
+/// 最初の管理者の登録に要る、セットアップコード。ユーザーがいない間だけ、起動のたびに作って、サーバーのログに出す。
+/// 接続元の判定（X-Forwarded-For に頼る）だけでは、プロキシの構成しだいで、見知らぬ人が先に登録できてしまうため、併用する
+fn setup_token() -> String {
+    static TOKEN: Mutex<Option<String>> = Mutex::new(None);
+    let mut g = TOKEN.lock().unwrap_or_else(|e| e.into_inner());
+    g.get_or_insert_with(|| {
+        let raw = random_token().replace(['-', '_'], "x");
+        raw.chars().take(20).collect()
+    })
+    .clone()
+}
+
 fn setup_allowed(client: &str) -> bool {
     client.parse::<std::net::IpAddr>().map(|ip| config::ip_in(&config::get().trusted_proxies, ip)).unwrap_or(false)
 }
@@ -208,6 +220,12 @@ pub fn setup(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
         return Err(err(403, "最初の管理者は、サーバーと同じ機械（http://127.0.0.1:8000/）から登録してください。または、サーバーで `ani-cal user create-admin <ユーザー名>` を実行してください"));
     }
     let m = body_obj(body);
+    // セットアップコード（サーバーのログに出ている）が合わないときも、重いパスワードの計算の前に断る
+    let given = opt_str(&m, "setup_token")?.unwrap_or_default();
+    if sha256_hex(given.trim()) != sha256_hex(&setup_token()) {
+        warn!("auth", "setup refused (wrong setup token): ip={}", clean(client));
+        return Err(err(403, "セットアップコードが違います。サーバーのログ（`docker compose logs | grep セットアップコード`）に出ているコードを入力してください"));
+    }
     let name = opt_str(&m, "username")?.unwrap_or_default().trim().to_string();
     let pw = opt_str(&m, "password")?.unwrap_or_default();
     check_username(&name)?;

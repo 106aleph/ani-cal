@@ -132,6 +132,16 @@ fn client_id(rq: &Request) -> String {
             return ip.to_string();
         }
     }
+    // 信頼しない接続元が X-Forwarded-For を付けてきたら、プロキシの設定漏れかもしれないので、一度だけ知らせる
+    // （プロキシが別のホストにあるのに TRUSTED_PROXIES に入れていないと、接続元がすべてプロキシの住所になり、Cookie の Secure も付かない）
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if req_header(rq, "X-Forwarded-For").is_some() && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        warn!(
+            "app",
+            "信頼していない接続元 {} から、X-Forwarded-For つきの要求が来ました。プロキシが別のホストにあるなら、そのアドレスを TRUSTED_PROXIES に入れてください（README 参照）",
+            peer.map(|ip| ip.to_string()).unwrap_or_default()
+        );
+    }
     peer.map(|ip| ip.to_string()).unwrap_or_default()
 }
 
@@ -385,7 +395,9 @@ fn handle(mut rq: Request) {
     }
     // Botプロテクション（Turnstile）は、失敗の回数にも数えず、パスワードの計算にも入る前に済ませる
     if method == "POST" && matches!(path.as_str(), "/api/auth/login" | "/api/auth/register") {
-        if let Err(e) = turnstile::check(&body, &client_id(&rq)) {
+        let host = req_header(&rq, "Host").unwrap_or_default().to_lowercase();
+        let host = if host.starts_with('[') { host.split(']').next().unwrap_or("").trim_start_matches('[').to_string() } else { host.split(':').next().unwrap_or("").to_string() };
+        if let Err(e) = turnstile::check(&body, &client_id(&rq), &host) {
             return respond_json(rq, e.status, &util::msg(&e.detail));
         }
     }

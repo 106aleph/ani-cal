@@ -133,7 +133,9 @@ function setLoginMode(mode) {
   $('#login-code').closest('label').hidden = !reg; // 招待コードは、招待での登録のときだけ
   $('#login-code').required = reg;
   $('#login-pass2').required = creating;
-  $('#login-msg').textContent = setup ? 'はじめに、管理者のユーザー名とパスワードを決めてください。この最初のユーザーが管理者になります。パスワードは10文字以上です。'
+  $('#login-setup-row').hidden = !setup; // 最初の管理者の登録には、サーバーのログに出ているコードが要る
+  $('#login-setup').required = setup;
+  $('#login-msg').textContent = setup ? 'はじめに、管理者のユーザー名とパスワードを決めてください。この最初のユーザーが管理者になります。パスワードは10文字以上です。セットアップコードは、サーバーのログ（docker compose logs）に出ています。'
     : reg ? '管理者から受け取った招待コードで、ユーザーを登録します。パスワードは10文字以上です。' : 'ログインしてください。';
   $('#login-submit').textContent = setup ? '管理者として登録' : reg ? '登録してログイン' : 'ログイン';
   $('#login-toggle').hidden = setup;
@@ -1302,6 +1304,7 @@ function init() {
           username: $('#login-user').value.trim(), password: $('#login-pass').value,
           ...(useTs ? { turnstile: tsToken } : {}),
           ...(reg ? { code: $('#login-code').value } : {}),
+          ...(setup ? { setup_token: $('#login-setup').value.trim() } : {}),
           ...(!reg && !setup && !$('#login-otp-row').hidden ? { otp: $('#login-otp').value } : {}),
         },
       });

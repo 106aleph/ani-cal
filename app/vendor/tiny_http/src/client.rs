@@ -32,6 +32,12 @@ pub struct ClientConnection {
     // set to true if we know that the previous request is the last one
     no_more_requests: bool,
 
+    // 前の要求の本文の読み残し（読み捨てるバイト数・接続を閉じる印）
+    state: std::sync::Arc<crate::util::ConnState>,
+
+    // 読み残しの確認のために先に読んだ、次の要求の最初の1バイト
+    pending_byte: Option<u8>,
+
     // true if the connection goes through SSL
     secure: bool,
 }
@@ -64,6 +70,8 @@ impl ClientConnection {
             remote_addr,
             next_header_source: first_header,
             no_more_requests: false,
+            state: Default::default(),
+            pending_byte: None,
             secure,
         }
     }
@@ -82,7 +90,10 @@ impl ClientConnection {
         let mut prev_byte_was_cr = false;
 
         loop {
-            let byte = self.next_header_source.by_ref().bytes().next();
+            let byte = match self.pending_byte.take() {
+                Some(b) => Some(Ok(b)),
+                None => self.next_header_source.by_ref().bytes().next(),
+            };
 
             let byte = match byte {
                 Some(b) => b?,
@@ -104,6 +115,7 @@ impl ClientConnection {
     /// Reads a request from the stream.
     /// Blocks until the header has been read.
     fn read(&mut self) -> Result<Request, ReadError> {
+        self.finish_previous().map_err(ReadError::ReadIoError)?;
         let (method, path, version, headers) = {
             // reading the request line
             let (method, path, version) = {
@@ -153,6 +165,7 @@ impl ClientConnection {
             *self.remote_addr.as_ref().unwrap(),
             data_source,
             writer,
+            Some(self.state.clone()),
         )
         .map_err(|e| {
             use crate::request;
@@ -305,5 +318,55 @@ mod test {
 
         assert!(super::parse_request_line("GET /hello").is_err());
         assert!(super::parse_request_line("qsd qsd qsd").is_err());
+    }
+}
+
+/// 前の要求の本文を読み残して終わったときの、読み捨ての上限（バイト数と時間）
+const MAX_DRAIN_BYTES: usize = 1024 * 1024;
+const MAX_DRAIN_TIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl ClientConnection {
+    /// 次の要求を読む前に、前の要求の本文の読み残しを片付ける。
+    /// ここ（接続ごとのスレッド）で行うので、要求を処理するスレッドは、遅い送信者に待たされない。
+    /// 読み捨てが上限（量・時間）を超えたり、読み捨てられない読み残し（chunked）があるときは、この接続を閉じる
+    fn finish_previous(&mut self) -> IoResult<()> {
+        use std::sync::atomic::Ordering;
+        // 前の要求が終わるまで、ここで待つ（次の要求の最初の1バイトが読める＝前の本文の読み手が手放した）
+        let first = match self.next_header_source.by_ref().bytes().next() {
+            Some(b) => b?,
+            None => return Err(IoError::new(ErrorKind::ConnectionAborted, "Unexpected EOF")),
+        };
+        if self.state.poisoned.load(Ordering::SeqCst) {
+            return Err(IoError::new(ErrorKind::ConnectionAborted, "unread body"));
+        }
+        let remaining = self.state.drain_remaining.swap(0, Ordering::SeqCst);
+        if remaining == 0 {
+            self.pending_byte = Some(first);
+            return Ok(());
+        }
+        // いま読んだ1バイトは、本文の続き
+        if remaining > MAX_DRAIN_BYTES {
+            return Err(IoError::new(ErrorKind::ConnectionAborted, "unread body is too large"));
+        }
+        let deadline = std::time::Instant::now() + MAX_DRAIN_TIME;
+        let mut left = remaining - 1;
+        let mut buf = [0u8; 8192];
+        while left > 0 {
+            if std::time::Instant::now() > deadline {
+                return Err(IoError::new(ErrorKind::TimedOut, "draining the unread body took too long"));
+            }
+            let want = left.min(buf.len());
+            match self.next_header_source.read(&mut buf[..want]) {
+                Ok(0) => return Err(IoError::new(ErrorKind::ConnectionAborted, "Unexpected EOF")),
+                Ok(n) => left -= n,
+                Err(e) => return Err(e),
+            }
+        }
+        // 読み捨てたあと、本当の次の要求の最初の1バイトを読む
+        match self.next_header_source.by_ref().bytes().next() {
+            Some(b) => self.pending_byte = Some(b?),
+            None => return Err(IoError::new(ErrorKind::ConnectionAborted, "Unexpected EOF")),
+        }
+        Ok(())
     }
 }

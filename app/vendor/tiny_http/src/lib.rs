@@ -455,7 +455,8 @@ impl Drop for Server {
 
 /// 同時につなげる接続数の上限（接続ごとにスレッドを作るので、無いと、スレッドを使い果たされる）。
 /// - 全体: ループバック以外の接続の合計（既定 192）
-/// - 同じ接続元（IP）ごと: 既定 48。1つの端末が、全部の枠を埋めてしまえないようにする
+/// - 同じ接続元（IP）ごと: 既定 96（全体の半分）。1つの端末が、全部の枠を埋めてしまえないようにする。
+///   プロキシの後ろでは、全員の接続が、プロキシの1つの IP から来るので、使う人数に合わせて、増やすこと
 /// - ループバック（同じ機械のプロキシ・ヘルスチェック）は、上の数に数えず、別枠（LOOPBACK_RESERVED）を使う。
 ///   外からの接続で、全体の枠が埋まっても、ヘルスチェックや同じ機械のプロキシが、締め出されないようにする
 /// 超えた接続は、すぐに閉じる。環境変数 MAX_CONNECTIONS（全体）と MAX_CONNECTIONS_PER_IP（接続元ごと）で変えられる
@@ -480,7 +481,7 @@ fn limits() -> &'static Limits {
         loopback: AtomicUsize::new(0),
         per_ip: Default::default(),
         max_total: env_limit("MAX_CONNECTIONS", 192),
-        max_per_ip: env_limit("MAX_CONNECTIONS_PER_IP", 48),
+        max_per_ip: env_limit("MAX_CONNECTIONS_PER_IP", 96),
     })
 }
 

@@ -11,7 +11,7 @@ ng()  { echo "  FAIL $1"; FAIL=1; }
 chk() { if [ "$2" = "$3" ]; then ok "$1"; else ng "$1 (期待: $3 / 実際: $2)"; fi; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
-DB_PATH=$DIR/a.db BIND=127.0.0.1:$PORT REQUIRE_2FA=off SYNC_INTERVAL_HOURS=0 SYNC_ON_STARTUP=false \
+MAX_CONNECTIONS_PER_IP=8 DB_PATH=$DIR/a.db BIND=0.0.0.0:$PORT REQUIRE_2FA=off SYNC_INTERVAL_HOURS=0 SYNC_ON_STARTUP=false \
   SYOBOI_UA_URL=https://example.com TRUSTED_PROXIES=127.0.0.1 ALLOWED_HOSTS=cal.example.com "$BIN" >"$DIR/log" 2>&1 &
 PID=$!
 for _ in $(seq 1 50); do curl -s "$B/api/health" >/dev/null && break; sleep 0.2; done
@@ -102,6 +102,38 @@ echo "L-6 ALLOWED_HOSTS があるとき、外からの要求は、Host を 127.0
 chk "ローカルの 127.0.0.1 は通る"     "$(code $B/api/health)" 200
 chk "公開 IP からの Host: 127.0.0.1 は 421" "$(code -H 'X-Forwarded-For: 8.8.8.8' $B/api/health)" 421
 chk "許可したホスト名は通る"          "$(code -H 'Host: cal.example.com' -H 'X-Forwarded-For: 8.8.8.8' $B/api/health)" 200
+
+echo "R-1 ヘッダを少しずつ送り続ける接続は、合計の期限で切れる。同じ接続元からの接続数にも上限がある"
+LAN=$(hostname -I 2>/dev/null | awk '{print $1}')
+# ヘッダを、3秒ごとに1バイトずつ送る（無通信の15秒は超えない）
+( exec 5<>/dev/tcp/127.0.0.1/$PORT; printf 'GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nX-A: ' >&5
+  for _ in 1 2 3 4 5; do sleep 3; printf a >&5 2>/dev/null; done
+  a=$(date +%s%N); timeout 2 cat <&5 >/dev/null; echo $(( ($(date +%s%N)-a)/1000000 )) > "$DIR/drip_ms" ) &
+DRIPH=$!
+if [ -n "$LAN" ] && [ "$LAN" != 127.0.0.1 ]; then
+  HOLD=(); for _ in $(seq 1 10); do ( exec 6<>/dev/tcp/$LAN/$PORT; printf 'G' >&6; sleep 8 ) 2>/dev/null & HOLD+=($!); done
+  sleep 1
+  a=$(date +%s%N); ( exec 7<>/dev/tcp/$LAN/$PORT; timeout 3 cat <&7 >/dev/null ) 2>/dev/null; ms=$(( ($(date +%s%N)-a)/1000000 ))
+  chk "上限（接続元ごと8本）を超えた接続は、すぐに閉じられる" "$(awk -v m="$ms" 'BEGIN{print (m<1500)?"closed":"open"}')" closed
+  chk "その間も、同じ機械（ループバック）からは応答する"   "$(code -m 3 $B/api/health)" 200
+  wait "${HOLD[@]}"
+else
+  echo "  skip 接続元ごとの上限（ループバック以外のアドレスが無い）"
+fi
+wait $DRIPH
+chk "ヘッダを15秒近く送り続けた接続は、期限（10秒）で切れる" "$(awk -v m="$(cat "$DIR/drip_ms")" 'BEGIN{print (m<1500)?"closed":"open"}')" closed
+
+echo "R-2 取得データの話が範囲外の値でも、ほかの項目だけを直せる"
+sqlexec() { if command -v sqlite3 >/dev/null; then sqlite3 "$DIR/a.db" "$1"; elif command -v python3 >/dev/null; then python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(sys.argv[2]); c.commit()" "$DIR/a.db" "$1"; else return 1; fi; }
+EID=$(curl -s -b "$DIR/c1" "${J[@]}" -d '{"number":55,"start_at":"2026-02-01T00:00"}' $B/api/tracks/$TID/episodes | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+if sqlexec "UPDATE episodes SET number=-5, subtitle='$(head -c 400 /dev/zero | tr '\0' a)', source='sync' WHERE id=$EID"; then
+  LONGSUB=$(head -c 400 /dev/zero | tr '\0' a)
+  chk "値を変えずに視聴済みだけ直す（範囲外の話数・長いサブタイトルのまま）" "$(code -b "$DIR/c1" "${J[@]}" -X PATCH -d "{\"number\":-5,\"subtitle\":\"$LONGSUB\",\"watched\":true}" $B/api/episodes/$EID)" 200
+  chk "話数を、別の範囲外の値に変えるのは 422" "$(code -b "$DIR/c1" "${J[@]}" -X PATCH -d '{"number":-9}' $B/api/episodes/$EID)" 422
+  chk "サブタイトルを、別の長い値に変えるのは 422" "$(code -b "$DIR/c1" "${J[@]}" -X PATCH -d "{\"subtitle\":\"b$LONGSUB\"}" $B/api/episodes/$EID)" 422
+else
+  echo "  skip（sqlite3 も python3 も無い）"
+fi
 
 echo "L-1 chunked で JSON 以外を送れない"
 chk "text/plain の chunked は 415" "$(code -b "$DIR/c1" -H 'Content-Type: text/plain' -H 'Transfer-Encoding: chunked' -d '{}' $B/api/sync)" 415

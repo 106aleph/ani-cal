@@ -19,7 +19,7 @@ const MAX_INTERVAL_DAYS: i64 = 365; // 話の間隔（日）の上限
 const MAX_SYNC_DAYS: i64 = 90; // 一度に取得できる期間の上限（自主的な制限）
 const MAX_EPISODE_NUMBER: f64 = 99_999.0; // 手動で付けられる話数の範囲（0〜この値）
 const MAX_TRACKS_PER_USER: i64 = 2000; // 1人が登録できる作品の数
-const MAX_EPISODES_PER_TRACK: i64 = 5000; // 1つの作品に、手動・予測で足せる話の数（取得した話は数えない）
+const MAX_EPISODES_PER_TRACK: i64 = 2000; // 1つの作品に、手動・予測で足せる話の数（取得した話は数えない）
 const MAX_TITLE_LEN: usize = 200;
 const MAX_PLATFORM_LEN: usize = 100;
 const MAX_NOTE_LEN: usize = 2000;
@@ -161,9 +161,11 @@ fn generate_episodes(
     if !base_number.is_finite() || !(0.0..=MAX_EPISODE_NUMBER).contains(&base_number) || until - (base_number as i64) > MAX_EPISODES {
         return Err(err(422, "基準となる話数が範囲外です。話数を直してから、もう一度お試しください"));
     }
-    let existing: i64 = conn.query_row("SELECT COUNT(*) FROM episodes WHERE track_id=?", [track_id], |r| r.get(0))?;
-    if existing >= MAX_EPISODES_PER_TRACK {
-        return Err(err(422, "この作品の話が多すぎます"));
+    // 手動・予測で足した話だけを数える（取得した話は、ユーザーが作ったものではないので、数えない）。
+    // 今回の生成で増える分も含めて、上限を超えないようにする
+    let existing: i64 = conn.query_row("SELECT COUNT(*) FROM episodes WHERE track_id=? AND source IN ('manual','generated')", [track_id], |r| r.get(0))?;
+    if existing + (until - base_number as i64).max(0) > MAX_EPISODES_PER_TRACK {
+        return Err(err(422, format!("この作品に足せる話は、あと{}件までです", (MAX_EPISODES_PER_TRACK - existing).max(0))));
     }
     let mut created = 0;
     for n in (base_number as i64 + 1)..=until {
@@ -743,7 +745,7 @@ fn generate(id: &str, body: &Value) -> ApiResult {
         .ok_or_else(|| err(400, "基準となる話（話数と日時のある話）がありません"))?;
         let bn = base["number"].as_f64().unwrap_or(0.0);
         if (until as f64) <= bn {
-            return Err(err(400, format!("最終話数は {} 以上にしてください", bn as i64 + 1)));
+            return Err(err(400, format!("最終話数は {} 以上にしてください", (bn as i64).saturating_add(1))));
         }
         let n = generate_episodes(conn, id, bn, jstr(&base, "start_at").unwrap_or(""), until, interval, "generated")?;
         ok(json!({"created": n}))
@@ -800,7 +802,7 @@ fn add_episode(id: &str, body: &Value) -> ApiResult {
     check_len("サブタイトル", &subtitle, MAX_SUBTITLE_LEN)?;
     db::with_tx(|conn| {
         get_track(conn, id)?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM episodes WHERE track_id=?", [id], |r| r.get(0))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM episodes WHERE track_id=? AND source IN ('manual','generated')", [id], |r| r.get(0))?;
         if count >= MAX_EPISODES_PER_TRACK {
             return Err(err(422, format!("1つの作品に足せる話は、{}件までです", MAX_EPISODES_PER_TRACK)));
         }
@@ -830,15 +832,19 @@ fn update_episode(id: &str, body: &Value) -> ApiResult {
     let start_at = norm_dt(opt_str(&m, "start_at")?)?;
     let watched = opt_bool(&m, "watched")?;
     let hidden = opt_bool(&m, "hidden")?;
-    check_number(number)?;
-    check_len("サブタイトル", &subtitle, MAX_SUBTITLE_LEN)?;
     db::with_tx(|conn| {
         let e = get_episode(conn, id)?;
         let mut sets: Vec<String> = vec![];
         let mut args: Vec<SqlV> = vec![];
         let mut edited = false;
         let cur_number = e["number"].as_f64();
+        // 入力の検証は、実際に変える値だけにする。取得データの話数が範囲外・サブタイトルが長いときも、
+        // 画面の編集ダイアログは、変えていない値も送ってくるので、視聴済みや日時だけを直せなくなってしまう
+        if has("subtitle") && subtitle.as_deref().map(str::trim).filter(|s| !s.is_empty()) != jstr(&e, "subtitle") {
+            check_len("サブタイトル", &subtitle, MAX_SUBTITLE_LEN)?;
+        }
         if has("number") && number != cur_number {
+            check_number(number)?;
             if let Some(n) = number {
                 let dup: Option<i64> = conn
                     .query_row("SELECT 1 FROM episodes WHERE track_id=? AND number=? AND id<>?", params![jint(&e, "track_id"), n, id], |r| r.get(0))

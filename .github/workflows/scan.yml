@@ -1,0 +1,32 @@
+# イメージと依存の、既知の脆弱性を調べる（push・PR のときと、毎週月曜）
+name: scan
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+permissions:
+  contents: read
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: イメージをビルド
+        run: docker build -t ani-cal:scan app
+      - name: イメージを調べる（OS のパッケージ）
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ani-cal:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: 依存クレートを調べる（Cargo.lock）
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: app
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

@@ -1,0 +1,7 @@
+# Dockerfile のベースイメージ（digest で固定している）を、新しい版に更新する PR を作る
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /app
+    schedule:
+      interval: weekly

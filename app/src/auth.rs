@@ -60,6 +60,11 @@ pub fn uid() -> i64 {
     cur().uid
 }
 
+/// いまの要求が、管理者のものか
+pub fn is_admin() -> bool {
+    cur().admin
+}
+
 pub fn require_admin() -> Result<(), ApiErr> {
     if cur().admin {
         Ok(())
@@ -173,7 +178,7 @@ fn check_role(role: &str) -> Result<(), ApiErr> {
 pub fn bootstrap(conn: &Connection) {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0)).unwrap_or(0);
     if n == 0 {
-        warn!("auth", "ユーザーがまだいません。最初の管理者は、登録画面で、次のセットアップコードを入力して登録します（サーバーの `docker compose logs` に出ます）: {}", setup_token());
+        warn!("auth", "ユーザーがまだいません。最初の管理者は、登録画面で、次のセットアップコードを入力して登録します（サーバーの `docker compose logs` に出ます。有効なのは、起動から {} 分間）: {}", SETUP_TOKEN_MIN, setup_token().0);
     }
     adopt_legacy(conn);
 }
@@ -188,28 +193,32 @@ fn adopt_legacy(conn: &Connection) {
         }
     }
 }
-
-/// 最初のユーザー（管理者）を、まだ誰もいないときだけ登録できる。招待コードは要らない。
-/// 成功したら (ユーザー情報, セッショントークン)
-/// 最初の管理者の登録は、同じ機械・同じネットワーク（ループバックと私的なアドレス）からの接続だけに限る。
-/// 公開したあとで、見知らぬ人に先に登録されて、管理者を奪われるのを防ぐ。
-/// 接続元は、信頼するプロキシの後ろでは X-Forwarded-For の右端（`client_id`）。Docker 経由でも、ホストからは私的なアドレスで届く
 /// 最初の管理者の登録に要る、セットアップコード。ユーザーがいない間だけ、起動のたびに作って、サーバーのログに出す。
-/// 接続元の判定（X-Forwarded-For に頼る）だけでは、プロキシの構成しだいで、見知らぬ人が先に登録できてしまうため、併用する
-fn setup_token() -> String {
-    static TOKEN: Mutex<Option<String>> = Mutex::new(None);
-    let mut g = TOKEN.lock().unwrap_or_else(|e| e.into_inner());
-    g.get_or_insert_with(|| {
+/// 接続元の判定（X-Forwarded-For に頼る）だけでは、プロキシの構成しだいで、見知らぬ人が先に登録できてしまうため、併用する。
+/// 有効なのは、作ってから SETUP_TOKEN_MIN 分。ログが後から読まれても、古いコードでは登録できない（切れたら、再起動で作り直す）
+const SETUP_TOKEN_MIN: u64 = 60;
+
+static SETUP_TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+/// (コード, まだ有効か)。コードは、最初に使われたとき（起動時のログ出力）に作る
+fn setup_token() -> (String, bool) {
+    let mut g = SETUP_TOKEN.lock().unwrap_or_else(|e| e.into_inner());
+    let (t, at) = g.get_or_insert_with(|| {
         let raw = random_token().replace(['-', '_'], "x");
-        raw.chars().take(20).collect()
-    })
-    .clone()
+        (raw.chars().take(20).collect(), Instant::now())
+    });
+    (t.clone(), at.elapsed().as_secs() < SETUP_TOKEN_MIN * 60)
 }
 
+/// 最初の管理者の登録は、同じ機械・同じネットワーク（信頼するプロキシの範囲）からの接続だけに限る。
+/// 公開したあとで、見知らぬ人に先に登録されて、管理者を奪われるのを防ぐ。
+/// 接続元は、信頼するプロキシの後ろでは X-Forwarded-For の右端（`client_id`）。
 fn setup_allowed(client: &str) -> bool {
     client.parse::<std::net::IpAddr>().map(|ip| config::ip_in(&config::get().trusted_proxies, ip)).unwrap_or(false)
 }
 
+/// 最初のユーザー（管理者）を、まだ誰もいないときだけ登録できる。招待コードは要らない（代わりに、セットアップコードが要る）。
+/// 成功したら (ユーザー情報, セッショントークン)
 pub fn setup(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
     // 登録済みなら、重いパスワードの計算（Argon2）をせずに断る
     if !setup_needed() {
@@ -222,7 +231,12 @@ pub fn setup(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
     let m = body_obj(body);
     // セットアップコード（サーバーのログに出ている）が合わないときも、重いパスワードの計算の前に断る
     let given = opt_str(&m, "setup_token")?.unwrap_or_default();
-    if sha256_hex(given.trim()) != sha256_hex(&setup_token()) {
+    let (token, fresh) = setup_token();
+    if !fresh {
+        warn!("auth", "setup refused (setup token expired): ip={}", clean(client));
+        return Err(err(403, "セットアップコードの有効期限が切れました。サーバーを再起動して、新しいコードをログで確認してください"));
+    }
+    if sha256_hex(given.trim()) != sha256_hex(&token) {
         warn!("auth", "setup refused (wrong setup token): ip={}", clean(client));
         return Err(err(403, "セットアップコードが違います。サーバーのログ（`docker compose logs | grep セットアップコード`）に出ているコードを入力してください"));
     }
@@ -451,7 +465,7 @@ pub fn login(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
         warn!("auth", "login blocked (too many failures): user={} ip={}", clean(&name), clean(client));
         return Err(err(429, format!("ログインに失敗した回数が多すぎます。{}分ほど待ってからやり直してください", s.div_ceil(60))));
     }
-    let _slot = HashSlot::acquire()?;
+    let slot = HashSlot::acquire()?;
     let conn = db::connect();
     let row: Option<(i64, String, String)> = conn
         .query_row("SELECT id, password_hash, role FROM users WHERE username=?", [&name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -464,6 +478,8 @@ pub fn login(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
             false
         }
     };
+    // 重い計算（Argon2）が終わったので、枠を返す。失敗時の待ち（300ms）の間、枠を塞がない
+    drop(slot);
     if !good {
         record_fail(&key);
         warn!("auth", "login failed: user={} ip={}", clean(&name), clean(client));
@@ -539,8 +555,10 @@ fn verify_current_password(uid: i64, given: &str, hash: &str, msg: &str) -> Resu
     if let Some(s) = locked(&key) {
         return Err(err(429, format!("パスワードの確認に失敗した回数が多すぎます。{}分ほど待ってからやり直してください", s.div_ceil(60))));
     }
-    let _slot = HashSlot::acquire()?;
-    if !verify_password(given, hash) {
+    let slot = HashSlot::acquire()?;
+    let good = verify_password(given, hash);
+    drop(slot); // 失敗時の待ち（300ms）の間、枠を塞がない
+    if !good {
         record_fail(&key);
         warn!("auth", "password check failed: uid {}", uid);
         std::thread::sleep(std::time::Duration::from_millis(300));

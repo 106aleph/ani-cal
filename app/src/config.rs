@@ -149,8 +149,8 @@ pub fn now_s() -> String {
     fmt_dt(now())
 }
 
-/// 既定: 同じ機械（127.0.0.1）と、Docker・家庭内などの私的なアドレス。インターネットから直接来る接続は含まない
-const DEFAULT_TRUSTED_PROXIES: &str = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,fe80::/10";
+/// 既定: 同じ機械（ループバック）だけ。Docker の中では、ホストからの接続が、Docker の私的なアドレスで届くので、compose.yaml が明示している
+const DEFAULT_TRUSTED_PROXIES: &str = "127.0.0.0/8,::1/128";
 
 /// "1.2.3.4, 10.0.0.0/8, fc00::/7" のような一覧を読む。読めない項目は捨てる
 fn parse_cidrs(s: &str) -> Vec<(std::net::IpAddr, u8)> {
@@ -196,12 +196,16 @@ mod tests {
     #[test]
     fn trusted_proxy_ranges() {
         let d = parse_cidrs(DEFAULT_TRUSTED_PROXIES);
-        for ok in ["127.0.0.1", "::1", "172.18.0.1", "10.1.2.3", "192.168.0.5", "::ffff:172.17.0.1", "fd00::1"] {
+        // 既定は、ループバックだけ
+        for ok in ["127.0.0.1", "::1", "127.0.0.5", "::ffff:127.0.0.1"] {
             assert!(ip_in(&d, ok.parse().unwrap()), "{}", ok);
         }
-        for ng in ["8.8.8.8", "172.32.0.1", "100.64.0.1", "2001:db8::1", "::ffff:8.8.8.8"] {
+        for ng in ["8.8.8.8", "172.18.0.1", "10.1.2.3", "192.168.0.5", "fd00::1", "100.64.0.1", "2001:db8::1", "::ffff:8.8.8.8"] {
             assert!(!ip_in(&d, ng.parse().unwrap()), "{}", ng);
         }
+        // compose.yaml が明示する範囲（Docker の既定のネットワーク）
+        let c = parse_cidrs("127.0.0.0/8,::1/128,172.16.0.0/12");
+        assert!(ip_in(&c, "172.18.0.1".parse().unwrap()) && !ip_in(&c, "172.32.0.1".parse().unwrap()));
         assert!(!ip_in(&parse_cidrs(""), "127.0.0.1".parse().unwrap())); // 空なら、だれも信用しない
         assert!(ip_in(&parse_cidrs("203.0.113.7, bad, 1.2.3.4/99"), "203.0.113.7".parse().unwrap()));
     }

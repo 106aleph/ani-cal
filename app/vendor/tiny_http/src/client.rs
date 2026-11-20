@@ -109,6 +109,9 @@ impl ClientConnection {
             prev_byte_was_cr = byte == b'\r';
 
             buf.push(byte);
+            if buf.len() > MAX_LINE_BYTES {
+                return Err(IoError::new(ErrorKind::InvalidData, "request line or header is too long"));
+            }
         }
     }
 
@@ -129,12 +132,17 @@ impl ClientConnection {
             // getting all headers
             let headers = {
                 let mut headers = Vec::new();
+                let mut total = 0usize;
                 loop {
                     let line = self.read_next_line().map_err(ReadError::ReadIoError)?;
 
                     if line.is_empty() {
                         break;
                     };
+                    total += line.len();
+                    if total > MAX_HEADER_BYTES || headers.len() >= MAX_HEADERS {
+                        return Err(ReadError::ReadIoError(IoError::new(ErrorKind::InvalidData, "too many headers")));
+                    }
                     headers.push(match FromStr::from_str(line.as_str().trim()) {
                         // TODO: remove this conversion
                         Ok(h) => h,
@@ -231,6 +239,14 @@ impl Iterator for ClientConnection {
                     let response = Response::new_empty(StatusCode(417));
                     response.raw_print(writer, ver, &[], true, None).ok();
                     return None; // TODO: should be recoverable, but needs handling in case of body
+                }
+
+                Err(ReadError::ReadIoError(ref err)) if err.kind() == ErrorKind::InvalidData => {
+                    // 大きすぎるヘッダ・あいまいな本文の境界など。400 を返して、接続を閉じる
+                    let writer = self.sink.next().unwrap();
+                    let response = Response::new_empty(StatusCode(400));
+                    response.raw_print(writer, HTTPVersion(1, 1), &[], false, None).ok();
+                    return None;
                 }
 
                 Err(ReadError::ReadIoError(_)) => return None,
@@ -370,3 +386,8 @@ impl ClientConnection {
         Ok(())
     }
 }
+
+/// 要求行・ヘッダ1行の長さ、ヘッダ全体の大きさ、ヘッダの個数の上限（超えたら 400 で接続を閉じる）
+const MAX_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 32 * 1024;
+const MAX_HEADERS: usize = 100;

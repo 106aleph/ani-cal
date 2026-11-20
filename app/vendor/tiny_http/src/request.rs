@@ -147,6 +147,28 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
+    // 本文の境界があいまいになる要求は、断る（前段のプロキシとの解釈のずれで、要求の密輸に使われないように）:
+    // Content-Length が複数・数字でない／Transfer-Encoding が複数・chunked 以外／両方がある
+    {
+        let bad = |msg: &str| Err(RequestCreationError::CreationIoError(IoError::new(ErrorKind::InvalidData, msg.to_string())));
+        let tes: Vec<&Header> = headers.iter().filter(|h| h.field.equiv("Transfer-Encoding")).collect();
+        let cls: Vec<&Header> = headers.iter().filter(|h| h.field.equiv("Content-Length")).collect();
+        if tes.len() > 1 || cls.len() > 1 || (!tes.is_empty() && !cls.is_empty()) {
+            return bad("ambiguous message framing");
+        }
+        if let Some(te) = tes.first() {
+            if !te.value.as_str().trim().eq_ignore_ascii_case("chunked") {
+                return bad("unsupported transfer-encoding");
+            }
+        }
+        if let Some(cl) = cls.first() {
+            let v = cl.value.as_str().trim();
+            if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) || usize::from_str(v).is_err() {
+                return bad("invalid content-length");
+            }
+        }
+    }
+
     // finding the transfer-encoding header
     let transfer_encoding = headers
         .iter()
@@ -154,7 +176,7 @@ where
         .map(|h| h.value.clone());
 
     // finding the content-length header
-    let content_length = if transfer_encoding.is_some() {
+    let content_length: Option<usize> = if transfer_encoding.is_some() {
         // if transfer-encoding is specified, the Content-Length
         // header must be ignored (RFC2616 #4.4)
         None
@@ -201,17 +223,19 @@ where
         } else if content_length <= MAX_BUFFERED_BODY && !expects_continue {
             // if the content-length is small enough, we just read everything into a buffer
 
-            let mut buffer = vec![0; content_length];
-            let mut offset = 0;
+            // 宣言された大きさの配列を先に確保せず、届いた分だけ伸ばす（送らずに居座る接続が、メモリを取り続けないように）
+            let mut buffer: Vec<u8> = Vec::with_capacity(content_length.min(4096));
+            let mut chunk = [0u8; 8192];
             // 受け取りきるまでの合計の制限時間。1バイトずつ送り続ける相手でも、いつまでも居座れないようにする
             let deadline = std::time::Instant::now() + BODY_BUFFER_DEADLINE;
 
-            while offset != content_length {
+            while buffer.len() != content_length {
                 if std::time::Instant::now() > deadline {
                     let err = IoError::new(ErrorKind::TimedOut, "the request body took too long to arrive");
                     return Err(RequestCreationError::CreationIoError(err));
                 }
-                let read = source_data.read(&mut buffer[offset..])?;
+                let want = (content_length - buffer.len()).min(chunk.len());
+                let read = source_data.read(&mut chunk[..want])?;
                 if read == 0 {
                     // the socket returned EOF, but we were before the expected content-length
                     // aborting
@@ -220,7 +244,7 @@ where
                     return Err(RequestCreationError::CreationIoError(err));
                 }
 
-                offset += read;
+                buffer.extend_from_slice(&chunk[..read]);
             }
 
             Box::new(Cursor::new(buffer)) as Box<dyn Read + Send + 'static>

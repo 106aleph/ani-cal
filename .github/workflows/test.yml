@@ -34,7 +34,7 @@ jobs:
           mkdir /tmp/up && curl -sfL https://static.crates.io/crates/tiny_http/tiny_http-0.12.0.crate | tar xz -C /tmp/up
           changed=$(diff -rq /tmp/up/tiny_http-0.12.0/src app/vendor/tiny_http/src | sed 's|.*/vendor/tiny_http/src/||; s| differ||; s|Files .* and ||' | sort | tr '\n' ' ')
           echo "変更されているファイル: $changed"
-          expected="client.rs request.rs test.rs util/equal_reader.rs util/mod.rs "
+          expected="client.rs lib.rs request.rs test.rs util/equal_reader.rs util/mod.rs "
           if [ "$changed" != "$expected" ]; then
             echo "::error::vendor/tiny_http の変更が、PATCHES.md に書いたものと違います"; exit 1
           fi

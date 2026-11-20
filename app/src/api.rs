@@ -17,6 +17,31 @@ const SEASONS: [&str; 4] = ["冬", "春", "夏", "秋"];
 const MAX_EPISODES: i64 = 500; // 手動作成・予測で作れる話数の上限
 const MAX_INTERVAL_DAYS: i64 = 365; // 話の間隔（日）の上限
 const MAX_SYNC_DAYS: i64 = 90; // 一度に取得できる期間の上限（自主的な制限）
+const MAX_EPISODE_NUMBER: f64 = 99_999.0; // 手動で付けられる話数の範囲（0〜この値）
+const MAX_TRACKS_PER_USER: i64 = 2000; // 1人が登録できる作品の数
+const MAX_EPISODES_PER_TRACK: i64 = 5000; // 1つの作品に、手動・予測で足せる話の数（取得した話は数えない）
+const MAX_TITLE_LEN: usize = 200;
+const MAX_PLATFORM_LEN: usize = 100;
+const MAX_NOTE_LEN: usize = 2000;
+const MAX_SUBTITLE_LEN: usize = 300;
+
+/// 話数: 有限で、範囲内であること。巨大な値を入れて、生成のループを果てしなく回させるのを防ぐ
+fn check_number(n: Option<f64>) -> Result<(), ApiErr> {
+    match n {
+        Some(v) if !v.is_finite() || !(0.0..=MAX_EPISODE_NUMBER).contains(&v) => {
+            Err(err(422, format!("話数は 0〜{} で指定してください", MAX_EPISODE_NUMBER as i64)))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// 文字数の上限（長い文字列を大量に保存して、ディスクを埋められないように）
+fn check_len(label: &str, v: &Option<String>, max: usize) -> Result<(), ApiErr> {
+    match v {
+        Some(s) if s.chars().count() > max => Err(err(422, format!("{} は {} 文字以内にしてください", label, max))),
+        _ => Ok(()),
+    }
+}
 
 // ---------------------------------------------------------------- helpers
 fn norm_dt(v: Option<String>) -> Result<Option<String>, ApiErr> {
@@ -132,6 +157,14 @@ fn generate_episodes(
 ) -> Result<i64, ApiErr> {
     let base_dt = NaiveDateTime::parse_from_str(base_start, config::DT_FMT).map_err(|_| err(422, "日時の形式が不正です"))?;
     let now = config::now_s();
+    // 回す回数に上限を付ける。基準の話数が異常な値でも、果てしなく回って、DB の書き込みを止めないようにする
+    if !base_number.is_finite() || !(0.0..=MAX_EPISODE_NUMBER).contains(&base_number) || until - (base_number as i64) > MAX_EPISODES {
+        return Err(err(422, "基準となる話数が範囲外です。話数を直してから、もう一度お試しください"));
+    }
+    let existing: i64 = conn.query_row("SELECT COUNT(*) FROM episodes WHERE track_id=?", [track_id], |r| r.get(0))?;
+    if existing >= MAX_EPISODES_PER_TRACK {
+        return Err(err(422, "この作品の話が多すぎます"));
+    }
     let mut created = 0;
     for n in (base_number as i64 + 1)..=until {
         let exists: Option<i64> = conn
@@ -141,7 +174,7 @@ fn generate_episodes(
             continue;
         }
         let ms = (interval_days as f64 * (n as f64 - base_number) * 86_400_000.0).round() as i64;
-        let st = base_dt + Duration::milliseconds(ms);
+        let st = base_dt.checked_add_signed(Duration::milliseconds(ms)).ok_or_else(|| err(422, "日時が範囲外になります"))?;
         conn.execute(
             "INSERT INTO episodes(track_id, number, start_at, source, edited, updated_at) VALUES (?,?,?,?,?,?)",
             params![track_id, n as f64, config::fmt_dt(st), source, if source == "manual" { 1 } else { 0 }, now],
@@ -232,10 +265,24 @@ pub fn route(req: &Req) -> Option<ApiResult> {
 fn status() -> ApiResult {
     let conn = db::connect();
     let mut counts = serde_json::Map::new();
-    for k in ["titles", "programs", "channels", "tracks", "episodes"] {
+    for k in ["titles", "programs", "channels"] {
         let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {}", k), [], |r| r.get(0))?;
         counts.insert(k.into(), json!(n));
     }
+    // 登録作品と話の数は、ユーザーごとのデータ。管理者以外には、自分の分だけを返す（他の人の登録数を知らせない）
+    let (tracks, episodes): (i64, i64) = if auth::is_admin() {
+        (
+            conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?,
+            conn.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get(0))?,
+        )
+    } else {
+        (
+            conn.query_row("SELECT COUNT(*) FROM tracks WHERE user_id=?", [auth::uid()], |r| r.get(0))?,
+            conn.query_row("SELECT COUNT(*) FROM episodes e JOIN tracks t ON t.id=e.track_id WHERE t.user_id=?", [auth::uid()], |r| r.get(0))?,
+        )
+    };
+    counts.insert("tracks".into(), json!(tracks));
+    counts.insert("episodes".into(), json!(episodes));
     let mut v = sync::state_json();
     let o = v.as_object_mut().unwrap();
     o.insert("last_success".into(), db::get_meta(&conn, "last_success").map(Value::from).unwrap_or(Value::Null));
@@ -546,9 +593,15 @@ fn create_track(body: &Value) -> ApiResult {
     if !(1..=MAX_INTERVAL_DAYS).contains(&interval) {
         return Err(err(422, format!("interval_days は 1〜{} で指定してください", MAX_INTERVAL_DAYS)));
     }
+    check_len("タイトル", &title, MAX_TITLE_LEN)?;
+    check_len("媒体名", &platform, MAX_PLATFORM_LEN)?;
     let now = config::now_s();
     let nz = |s: &Option<String>| s.clone().filter(|x| !x.is_empty());
     db::with_tx(|conn| {
+        let owned: i64 = conn.query_row("SELECT COUNT(*) FROM tracks WHERE user_id=?", [auth::uid()], |r| r.get(0))?;
+        if owned >= MAX_TRACKS_PER_USER {
+            return Err(err(422, format!("登録できる作品は、{}件までです", MAX_TRACKS_PER_USER)));
+        }
         let new_id;
         if let (Some(tid), Some(chid)) = (tid, chid) {
             let ex: Option<i64> = conn.query_row("SELECT id FROM tracks WHERE tid=? AND chid=? AND user_id=?", params![tid, chid, auth::uid()], |r| r.get(0)).ok();
@@ -596,6 +649,12 @@ fn update_track(id: &str, body: &Value) -> ApiResult {
         if m.contains_key(k) {
             let v = opt_str(&m, k)?.unwrap_or_default();
             let v = v.trim().to_string();
+            let max = match k {
+                "title" => MAX_TITLE_LEN,
+                "platform" => MAX_PLATFORM_LEN,
+                _ => MAX_NOTE_LEN,
+            };
+            check_len(k, &Some(v.clone()), max)?;
             texts.push((k, if v.is_empty() { None } else { Some(v) }));
         }
     }
@@ -737,8 +796,14 @@ fn add_episode(id: &str, body: &Value) -> ApiResult {
     let start_at = norm_dt(opt_str(&m, "start_at")?)?;
     let watched = opt_bool(&m, "watched")?.unwrap_or(false);
     let now = config::now_s();
+    check_number(number)?;
+    check_len("サブタイトル", &subtitle, MAX_SUBTITLE_LEN)?;
     db::with_tx(|conn| {
         get_track(conn, id)?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM episodes WHERE track_id=?", [id], |r| r.get(0))?;
+        if count >= MAX_EPISODES_PER_TRACK {
+            return Err(err(422, format!("1つの作品に足せる話は、{}件までです", MAX_EPISODES_PER_TRACK)));
+        }
         if let Some(n) = number {
             let dup: Option<i64> = conn.query_row("SELECT 1 FROM episodes WHERE track_id=? AND number=?", params![id, n], |r| r.get(0)).ok();
             if dup.is_some() {
@@ -765,6 +830,8 @@ fn update_episode(id: &str, body: &Value) -> ApiResult {
     let start_at = norm_dt(opt_str(&m, "start_at")?)?;
     let watched = opt_bool(&m, "watched")?;
     let hidden = opt_bool(&m, "hidden")?;
+    check_number(number)?;
+    check_len("サブタイトル", &subtitle, MAX_SUBTITLE_LEN)?;
     db::with_tx(|conn| {
         let e = get_episode(conn, id)?;
         let mut sets: Vec<String> = vec![];

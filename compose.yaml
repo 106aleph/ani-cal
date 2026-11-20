@@ -15,6 +15,9 @@ services:
         required: false
     environment:
       DB_PATH: /data/anime.db
+      # X-Forwarded-For を信用する接続元。ホスト（tailscale serve・cloudflared など）からの接続は、コンテナの中では、Docker の私的なアドレス（既定は 172.16.0.0/12）で届く。
+      # Docker のネットワークの範囲を変えているときは、.env の TRUSTED_PROXIES で指定する
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-127.0.0.0/8,::1/128,172.16.0.0/12}"
     volumes:
       - ./data:/data
     restart: unless-stopped

@@ -88,7 +88,7 @@ fn with_sec<R: std::io::Read>(r: Response<R>) -> Response<R> {
     .with_header(header("Strict-Transport-Security", "max-age=31536000; includeSubDomains"))
 }
 
-/// Host ヘッダの検査（ALLOWED_HOSTS が設定されているとき）。127.0.0.1 / localhost は常に許可する
+/// Host ヘッダの検査（ALLOWED_HOSTS が設定されているとき）。127.0.0.1 / localhost は、同じ機械・同じネットワークからの接続にだけ許可する
 fn host_allowed(rq: &Request) -> bool {
     let allowed = &config::get().allowed_hosts;
     if allowed.is_empty() {
@@ -96,7 +96,14 @@ fn host_allowed(rq: &Request) -> bool {
     }
     let host = req_header(rq, "Host").unwrap_or_default().to_lowercase();
     let name = if host.starts_with('[') { host.split(']').next().unwrap_or("").trim_start_matches('[').to_string() } else { host.split(':').next().unwrap_or("").to_string() };
-    matches!(name.as_str(), "127.0.0.1" | "localhost" | "::1") || allowed.iter().any(|a| *a == name || *a == host)
+    if allowed.iter().any(|a| *a == name || *a == host) {
+        return true;
+    }
+    // 127.0.0.1 / localhost は、要求の接続元も、同じ機械・同じネットワーク（信頼するプロキシの範囲）のときだけ許す。
+    // プロキシが、外からの要求の Host を 127.0.0.1 にして転送してきても、Host の制限を、すり抜けられないようにする
+    // （セットアップ前の登録や、ホストからのヘルスチェック・SSH の転送は、これで通る）
+    matches!(name.as_str(), "127.0.0.1" | "localhost" | "::1")
+        && client_id(rq).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback() || config::ip_in(&config::get().trusted_proxies, ip))
 }
 
 /// 別のサイトからのリクエスト（CSRF）を弾く: Origin があるなら、このサーバーのホストと同じであること

@@ -318,9 +318,18 @@ impl Server {
 
                 match new_client {
                     Ok(client) => {
+                        // 同時につなげる数に上限を付ける（接続ごとにスレッドを作るため、上限が無いと、スレッドを使い果たされる）。
+                        // 超えた接続は、すぐに閉じる
+                        if ACTIVE_CONNECTIONS.fetch_add(1, Relaxed) >= MAX_CONNECTIONS {
+                            ACTIVE_CONNECTIONS.fetch_sub(1, Relaxed);
+                            drop(client);
+                            continue;
+                        }
+                        let guard = ConnectionGuard;
                         let messages = inside_messages.clone();
                         let mut client = Some(client);
                         tasks_pool.spawn(Box::new(move || {
+                            let _guard = &guard;
                             if let Some(client) = client.take() {
                                 // Synchronization is needed for HTTPS requests to avoid a deadlock
                                 if client.secure() {
@@ -441,5 +450,17 @@ impl Drop for Server {
                 let _ = std::fs::remove_file(path);
             }
         }
+    }
+}
+
+/// 同時につなげる接続数の上限と、いまの数
+const MAX_CONNECTIONS: usize = 192;
+static ACTIVE_CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 接続を処理するスレッドが終わったときに、数を戻す
+struct ConnectionGuard;
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        ACTIVE_CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }

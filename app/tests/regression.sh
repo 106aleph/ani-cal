@@ -12,17 +12,17 @@ chk() { if [ "$2" = "$3" ]; then ok "$1"; else ng "$1 (期待: $3 / 実際: $2)"
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 DB_PATH=$DIR/a.db BIND=127.0.0.1:$PORT REQUIRE_2FA=off SYNC_INTERVAL_HOURS=0 SYNC_ON_STARTUP=false \
-  SYOBOI_UA_URL=https://example.com TRUSTED_PROXIES=127.0.0.1 "$BIN" >"$DIR/log" 2>&1 &
+  SYOBOI_UA_URL=https://example.com TRUSTED_PROXIES=127.0.0.1 ALLOWED_HOSTS=cal.example.com "$BIN" >"$DIR/log" 2>&1 &
 PID=$!
 for _ in $(seq 1 50); do curl -s "$B/api/health" >/dev/null && break; sleep 0.2; done
-TOK=$(grep -o 'ます）: [A-Za-z0-9]*' "$DIR/log" | awk '{print $2}')
+TOK=$(grep -o '分間）: [A-Za-z0-9]*' "$DIR/log" | awk '{print $2}')
 PW=correct-horse-battery-1
 setup() { echo "{\"username\":\"first\",\"password\":\"$PW\",\"setup_token\":\"$1\"}"; }
 
 echo "M-1 最初の管理者の登録"
 chk "セットアップコードなしは断る"        "$(code "${J[@]}" -d '{"username":"first","password":"'$PW'"}' $B/api/auth/setup)" 403
 chk "違うコードは断る"                    "$(code "${J[@]}" -d "$(setup wrong)" $B/api/auth/setup)" 403
-chk "正しいコードでも、公開 IP からは断る" "$(code "${J[@]}" -H 'X-Forwarded-For: 8.8.8.8' -d "$(setup "$TOK")" $B/api/auth/setup)" 403
+chk "正しいコードでも、公開 IP からは断る" "$(code "${J[@]}" -H 'Host: cal.example.com' -H 'X-Forwarded-For: 8.8.8.8' -d "$(setup "$TOK")" $B/api/auth/setup)" 403
 chk "正しいコード・ローカルからは通る"    "$(code -c "$DIR/c1" "${J[@]}" -d "$(setup "$TOK")" $B/api/auth/setup)" 201
 chk "登録後は断る"                        "$(code "${J[@]}" -d "$(setup "$TOK")" $B/api/auth/setup)" 409
 
@@ -70,6 +70,38 @@ sleep 3
 t=$(curl -s -o /dev/null -m 3 -w '%{time_total}' $B/api/health)
 chk "攻撃中も、1秒以内に応答する" "$(awk -v t="$t" 'BEGIN{print (t<1.0)?"fast":"slow"}')" fast
 wait "${DRIP[@]}"
+
+echo "M-1 話数の範囲外の値・巨大な値では、話を作れない（DB の書き込みを止められない）"
+TID=$(curl -s -b "$DIR/c1" "${J[@]}" -d '{"title":"x"}' $B/api/tracks | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+chk "話数 -1e15 は 422"       "$(code -b "$DIR/c1" "${J[@]}" -d '{"number":-1000000000000000,"start_at":"2026-01-01T00:00"}' $B/api/tracks/$TID/episodes)" 422
+chk "話数 1e15 は 422"        "$(code -b "$DIR/c1" "${J[@]}" -d '{"number":1000000000000000,"start_at":"2026-01-01T00:00"}' $B/api/tracks/$TID/episodes)" 422
+chk "正常な話数は作れる"      "$(code -b "$DIR/c1" "${J[@]}" -d '{"number":1,"start_at":"2026-01-01T00:00"}' $B/api/tracks/$TID/episodes)" 201
+s=$(date +%s%N); g=$(code -m 10 -b "$DIR/c1" "${J[@]}" -d '{"until":20,"interval_days":7}' $B/api/tracks/$TID/generate)
+chk "予測の作成は、すぐ終わる" "$g" 200
+chk "長すぎるタイトルは 422"  "$(code -b "$DIR/c1" "${J[@]}" -d "{\"title\":\"$(head -c 300 /dev/zero | tr '\0' a)\"}" $B/api/tracks)" 422
+
+echo "L-2 /api/status の登録数は、管理者以外には自分の分だけ"
+CODE2=$(curl -s -b "$DIR/c1" "${J[@]}" -X POST -d '{"role":"user"}' $B/api/invites | grep -o '"code":"[^"]*"' | cut -d'"' -f4)
+curl -s -c "$DIR/c3" "${J[@]}" -d "{\"username\":\"third\",\"password\":\"correct-horse-battery-3\",\"code\":\"$CODE2\"}" $B/api/auth/register >/dev/null
+chk "管理者: 作品が1件以上"   "$(curl -s -b "$DIR/c1" $B/api/status | grep -o '"tracks":[0-9]*')" '"tracks":1'
+chk "一般ユーザー: 自分の分(0)" "$(curl -s -b "$DIR/c3" $B/api/status | grep -o '"tracks":[0-9]*')" '"tracks":0'
+
+echo "M-2 / M-3 大きすぎるヘッダ・あいまいな本文の境界は、400 で断る"
+raw() { exec 4<>/dev/tcp/127.0.0.1/$PORT; printf "$1" >&4; timeout 3 head -c 200 <&4 | head -1 | tr -d '\r'; exec 4>&-; }
+long=$(head -c 20000 /dev/zero | tr '\0' a)
+chk "巨大なヘッダ行は 400"            "$(raw "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nX-A: $long\r\n\r\n")" "HTTP/1.1 400 Bad Request"
+many=$(for i in $(seq 1 150); do printf "X-H$i: v\r\n"; done)
+chk "ヘッダが多すぎる要求は 400"      "$(raw "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n$many\r\n")" "HTTP/1.1 400 Bad Request"
+chk "Content-Length が2つは 400"      "$(raw "POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}")" "HTTP/1.1 400 Bad Request"
+chk "CL と TE の両方は 400"           "$(raw "POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")" "HTTP/1.1 400 Bad Request"
+chk "TE が chunked 以外は 400"        "$(raw "POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: identity\r\n\r\n")" "HTTP/1.1 400 Bad Request"
+chk "Content-Length が数字でないものは 400" "$(raw "POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 1x\r\n\r\n{}")" "HTTP/1.1 400 Bad Request"
+chk "その後も動いている"              "$(code -m 3 $B/api/health)" 200
+
+echo "L-6 ALLOWED_HOSTS があるとき、外からの要求は、Host を 127.0.0.1 にしても通らない"
+chk "ローカルの 127.0.0.1 は通る"     "$(code $B/api/health)" 200
+chk "公開 IP からの Host: 127.0.0.1 は 421" "$(code -H 'X-Forwarded-For: 8.8.8.8' $B/api/health)" 421
+chk "許可したホスト名は通る"          "$(code -H 'Host: cal.example.com' -H 'X-Forwarded-For: 8.8.8.8' $B/api/health)" 200
 
 echo "L-1 chunked で JSON 以外を送れない"
 chk "text/plain の chunked は 415" "$(code -b "$DIR/c1" -H 'Content-Type: text/plain' -H 'Transfer-Encoding: chunked' -d '{}' $B/api/sync)" 415

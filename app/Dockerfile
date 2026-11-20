@@ -4,6 +4,7 @@ RUN apk add --no-cache build-base
 WORKDIR /src
 # 依存だけ先にビルドしてキャッシュする（ソースを変えても依存の再ビルドを避ける）
 COPY Cargo.toml Cargo.lock ./
+COPY vendor ./vendor
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --locked && rm -rf src
 COPY src ./src
 COPY static ./static

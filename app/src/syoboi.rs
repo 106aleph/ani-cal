@@ -373,7 +373,9 @@ fn parse_programs(rows: &[Item]) -> Vec<Program> {
         let (pid, tid, chid) = (int(it.get("PID")), int(it.get("TID")), int(it.get("ChID")));
         let st = parse_dt(it.get("StTime"));
         let (Some(pid), Some(tid), Some(chid), Some(st)) = (pid, tid, chid, st) else { continue };
-        let st = st + Duration::seconds(int(it.get("StOffset")).unwrap_or(0));
+        // 上流の値は信用しない。範囲外の値で、日時の計算が失敗（panic）して、取得が止まらないようにする（±30日まで）
+        let off = int(it.get("StOffset")).unwrap_or(0).clamp(-30 * 86400, 30 * 86400);
+        let Some(st) = st.checked_add_signed(Duration::seconds(off)) else { continue };
         let ed = parse_dt(it.get("EdTime"));
         out.push(Program {
             pid,

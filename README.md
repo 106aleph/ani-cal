@@ -24,7 +24,7 @@ cp .env.example .env              # SYOBOI_UA_URL を設定 (下記)
 docker compose up -d --build      # 初回取得は数分 (docker compose logs -f で確認)
 ```
 
-1. **管理者を登録**: ホスト上で `http://127.0.0.1:8000/` を開き、ユーザー名とパスワード (10文字以上)を決めて登録します。最初のユーザーが管理者になり、以後この画面は使えません。SSH で入っている場合は、`ssh -L 8000:127.0.0.1:8000 <ホスト>` で手元に転送すると開けます。以前のバージョンの登録作品・通知は、この管理者に引き継がれます。
+1. **管理者を登録**: ホスト上で `http://127.0.0.1:8000/` を開き、ユーザー名とパスワード (10文字以上)を決めて登録します。最初のユーザーが管理者になり、以後この画面は使えません。この登録は、サーバーと同じ機械・同じネットワーク（ループバックと私的なアドレス）からしか受け付けません。公開したあとで、見知らぬ人に先に登録されないためです。画面が使えない構成のときは、`docker compose exec -u app app ani-cal user create-admin <ユーザー名>` で作れます（仮パスワードを表示。ユーザーがいないときだけ）。SSH で入っている場合は、`ssh -L 8000:127.0.0.1:8000 <ホスト>` で手元に転送すると開けます。以前のバージョンの登録作品・通知は、この管理者に引き継がれます。
 2. **公開**: `sudo tailscale serve --bg 8000` を実行します (`APP_PORT` を変えた場合はその番号)。tailnet 内の端末から `https://<ホスト名>.<tailnet名>.ts.net/` を開いて使います。ブラウザからホーム画面やデスクトップにインストール (PWA) もできます。
 
 - `SYOBOI_UA_URL` には、**自分への**連絡方法を載せた、誰でも見られるページの URL を設定します。この URL がしょぼいカレンダーへの User-Agent に入り、問題があれば運営から連絡できます。このリポジトリの連絡先は作者のものなので、自分で運用するときは使わないでください。
@@ -74,8 +74,8 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
    - `ALLOWED_HOSTS=cal.example.com`: 別のホスト名での要求を断ります (カンマ区切り)。
    - `REQUIRE_2FA=admin` (既定) / `all` / `off`: 2段階認証を必須にする対象です。公開するなら `all` を推奨します。
    - `COOKIE_SECURE=1`: プロキシが `X-Forwarded-Proto: https` を付けないときだけ必要です。
-4. 必要なら、「管理」タブの「Botプロテクション」で Cloudflare Turnstile を設定します。Cloudflare のダッシュボードでウィジェットを作り、サイトキーとシークレットキーを入力します。保存すると、ログインと新規登録にBotプロテクションが付きます。tailnet だけで使うなら不要です。
-5. 回数制限は、`X-Forwarded-For` の**右端**を接続元として数えます。プロキシがこの値に接続元を追記することを確認してください (一般的なプロキシは追記します)。この値は、信頼するプロキシ (既定は、同じ機械と Docker・家庭内などの私的なアドレス) から来た要求のものだけ使い、それ以外は直接の接続元で数えます。プロキシが別のホストにあるときは、`TRUSTED_PROXIES` にそのアドレスを入れます。
+4. 必要なら、「管理」タブの「Botプロテクション」で Cloudflare Turnstile を設定します。Cloudflare のダッシュボードでウィジェットを作り、サイトキーとシークレットキーを入力します。保存すると、ログインと新規登録にBotプロテクションが付きます。`ALLOWED_HOSTS` も設定してください（別のサイトで取られたトークンの使い回しを、ホスト名で照合できます）。tailnet だけで使うなら不要です。
+5. 回数制限は、`X-Forwarded-For` の**右端**を接続元として数えます。プロキシがこの値に接続元を追記することを確認してください (一般的なプロキシは追記します)。この値は、信頼するプロキシ (既定は、同じ機械と Docker・家庭内などの私的なアドレス) から来た要求のものだけ使い、それ以外は直接の接続元で数えます。プロキシが別のホストにあるときは、`TRUSTED_PROXIES` にそのアドレスを入れます（入れないと、`X-Forwarded-For` と `X-Forwarded-Proto` が無視されて、接続元がプロキシのアドレスになり、Cookie にも Secure が付きません）。既定は私的なアドレス全体を信頼するので、同じ LAN の機器が直接つなげる構成では、`TRUSTED_PROXIES` をプロキシのアドレスだけにしてください。
 
 **Cloudflare Tunnel で公開する場合**
 1. `ALLOWED_HOSTS` には、公開するホスト名に加えて、tailnet のホスト名も入れます。入れないと、tailnet からのアクセスが断られます。
@@ -129,7 +129,7 @@ docker compose ps                                        # healthy なら OK
 docker compose logs --tail 20
 curl -s http://127.0.0.1:8000/api/health; echo           # 稼働確認
 git pull && docker compose up -d --build                 # 更新 (ソースだけの再ビルドは約1分)
-sudo sqlite3 data/anime.db ".backup $HOME/backup-$(date +%F).db"   # バックアップ (要 sqlite3)
+(umask 077; sudo sqlite3 data/anime.db ".backup $HOME/backup-$(date +%F).db")   # バックアップ (要 sqlite3。パスワードのハッシュや各種の鍵が入るので、自分だけが読める権限で作る)
 docker compose down                                      # 停止
 sudo tailscale serve --https=443 off                     # serve の設定を外す
 ```
@@ -140,6 +140,7 @@ sudo tailscale serve --https=443 off                     # serve の設定を外
 docker compose exec -u app app ani-cal user list                       # ユーザー一覧
 docker compose exec -u app app ani-cal user reset-password <ユーザー名>  # 仮パスワードを1回だけ表示
 docker compose exec -u app app ani-cal user reset-2fa <ユーザー名>       # 2段階認証を解除
+docker compose exec -u app app ani-cal user create-admin <ユーザー名>   # 最初の管理者を作る (ユーザーがいないときだけ)
 ```
 
 `reset-password` と `reset-2fa` は、そのユーザーのログインをすべて解除します。データは `./data/anime.db` にあります。
@@ -158,7 +159,7 @@ cd app
 DB_PATH=./dev.db BIND=127.0.0.1:8000 cargo run   # http://127.0.0.1:8000/
 ```
 
-Rust 1.89 以上が必要です。画面 (`app/static/`) はビルド時にバイナリへ埋め込むので、変更したら再ビルドしてください。
+Rust 1.89 以上が必要です。画面 (`app/static/`) はビルド時にバイナリへ埋め込むので、変更したら再ビルドしてください。 HTTP サーバー (tiny_http) は、一部を修正した写しを `app/vendor/tiny_http` に置いています (内容は `PATCHES.md`)。
 
 ## API (参考)
 

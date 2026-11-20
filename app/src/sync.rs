@@ -205,6 +205,18 @@ pub fn run_sync(start_date: Option<NaiveDateTime>, end_date: Option<NaiveDateTim
     if RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return false;
     }
+    // 途中で panic しても、「実行中」のままにならないようにする（そうなると、以後ずっと取得できなくなる）
+    struct RunGuard;
+    impl Drop for RunGuard {
+        fn drop(&mut self) {
+            update(|s| {
+                s.running = false;
+                s.progress = None;
+            });
+            RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = RunGuard;
     update(|s| {
         s.running = true;
         s.progress = Some("開始".into());

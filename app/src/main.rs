@@ -108,7 +108,9 @@ fn same_origin(rq: &Request) -> bool {
     }
     let Some(origin) = req_header(rq, "Origin") else { return true }; // ブラウザ以外（curl など）
     let o = origin.split_once("://").map(|(_, h)| h).unwrap_or(&origin);
-    [req_header(rq, "Host"), req_header(rq, "X-Forwarded-Host")].into_iter().flatten().any(|h| h.eq_ignore_ascii_case(o))
+    // X-Forwarded-Host は、信頼するプロキシが付けたものだけを見る
+    let fwd = if from_trusted_proxy(rq) { req_header(rq, "X-Forwarded-Host") } else { None };
+    [req_header(rq, "Host"), fwd].into_iter().flatten().any(|h| h.eq_ignore_ascii_case(o))
 }
 
 /// 直接の接続元が、信頼するプロキシか（既定は、同じ機械と私的なアドレスだけ。`TRUSTED_PROXIES` で変えられる）
@@ -253,10 +255,6 @@ fn respond_json_cookie(rq: Request, status: u16, body: &Value, cookie: Option<St
             .with_status_code(status)
             .with_header(header("Content-Type", "application/json"))
             .with_header(header("Cache-Control", "no-store"));
-        // 本文を受け取りきれなかった・断った要求は、残りを読み捨てて待たずに、接続ごと閉じる
-        if status == 408 || status == 413 {
-            r = r.with_header(header("Connection", "close"));
-        }
         if let Some(c) = &cookie {
             r = r.with_header(header("Set-Cookie", c));
         }
@@ -339,7 +337,9 @@ fn handle(mut rq: Request) {
         if !same_origin(&rq) {
             return respond_json(rq, 403, &util::msg("別のサイトからのリクエストは受け付けません"));
         }
-        if rq.body_length().unwrap_or(0) > 0 && !is_json(&rq) {
+        // 本文があるとき（Content-Length が 0 より大きい、または chunked で長さが分からない）は、JSON であること
+        let has_body = rq.body_length().unwrap_or(0) > 0 || req_header(&rq, "Transfer-Encoding").is_some();
+        if has_body && !is_json(&rq) {
             return respond_json(rq, 415, &util::msg("Content-Type は application/json にしてください"));
         }
     }
@@ -402,7 +402,7 @@ fn handle(mut rq: Request) {
         return respond_json(rq, 200, &json!({"needed": auth::setup_needed(), "turnstile_site_key": turnstile::site_key()}));
     }
     if method == "POST" && path == "/api/auth/setup" {
-        return match auth::setup(&body) {
+        return match auth::setup(&body, &client_id(&rq)) {
             Ok((me, token)) => respond_json_cookie(rq, 201, &me, Some(auth::cookie_value(&token, secure))),
             Err(e) => respond_json(rq, e.status, &util::msg(&e.detail)),
         };
@@ -475,6 +475,9 @@ fn main() {
     turnstile::load();
     if turnstile::enabled() {
         info!("app", "Cloudflare Turnstile: 有効（ログイン・新規登録でBotプロテクション）");
+        if cfg.allowed_hosts.is_empty() {
+            warn!("app", "ALLOWED_HOSTS が未設定です。Botプロテクションの確認で、別のサイトで取られたトークンの使い回しを照合できません。公開するときは設定してください");
+        }
     }
     db::restrict_permissions();
     if cfg.syoboi_ua_url.is_empty() {

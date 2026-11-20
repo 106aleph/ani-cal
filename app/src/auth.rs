@@ -191,7 +191,22 @@ fn adopt_legacy(conn: &Connection) {
 
 /// 最初のユーザー（管理者）を、まだ誰もいないときだけ登録できる。招待コードは要らない。
 /// 成功したら (ユーザー情報, セッショントークン)
-pub fn setup(body: &Value) -> Result<(Value, String), ApiErr> {
+/// 最初の管理者の登録は、同じ機械・同じネットワーク（ループバックと私的なアドレス）からの接続だけに限る。
+/// 公開したあとで、見知らぬ人に先に登録されて、管理者を奪われるのを防ぐ。
+/// 接続元は、信頼するプロキシの後ろでは X-Forwarded-For の右端（`client_id`）。Docker 経由でも、ホストからは私的なアドレスで届く
+fn setup_allowed(client: &str) -> bool {
+    client.parse::<std::net::IpAddr>().map(|ip| config::ip_in(&config::get().trusted_proxies, ip)).unwrap_or(false)
+}
+
+pub fn setup(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
+    // 登録済みなら、重いパスワードの計算（Argon2）をせずに断る
+    if !setup_needed() {
+        return Err(err(409, "管理者は既に登録されています。ログインしてください"));
+    }
+    if !setup_allowed(client) {
+        warn!("auth", "setup refused (not from the local network): ip={}", clean(client));
+        return Err(err(403, "最初の管理者は、サーバーと同じ機械（http://127.0.0.1:8000/）から登録してください。または、サーバーで `ani-cal user create-admin <ユーザー名>` を実行してください"));
+    }
     let m = body_obj(body);
     let name = opt_str(&m, "username")?.unwrap_or_default().trim().to_string();
     let pw = opt_str(&m, "password")?.unwrap_or_default();
@@ -317,7 +332,12 @@ pub fn rate_ok(bucket: &str, client: &str, max: usize, window_sec: u64) -> bool 
     if m.len() > 5000 {
         m.retain(|_, q| q.back().is_some_and(|t| t.elapsed().as_secs() < window_sec));
         if m.len() > 5000 {
-            m.clear();
+            // 全部を消すと、制限をやり直せてしまう。いちばん古い順に、5000件に収まるまで捨てる
+            let mut ages: Vec<(Instant, String)> = m.iter().filter_map(|(k, q)| q.back().map(|t| (*t, k.clone()))).collect();
+            ages.sort();
+            for (_, k) in ages.into_iter().take(m.len() - 5000) {
+                m.remove(&k);
+            }
         }
     }
     let q = m.entry(format!("{}|{}", bucket, client)).or_default();
@@ -341,9 +361,11 @@ static FAILS: Mutex<Option<HashMap<String, (u32, Instant)>>> = Mutex::new(None);
 /// 先頭の2つだけ、成功すると数えを戻す（`&key[..2]`）
 fn limits(name: &str, client: &str) -> [(String, u32); 3] {
     let name: String = name.chars().take(64).collect();
+    // キーの先頭に種類を付ける。入力されたユーザー名が、パスワード・認証コード用のキー（\0 で始まる）や、
+    // ほかの種類のキーと、同じ文字列にならないようにする（ユーザー名は、未認証の相手が自由に決められる）
     [
-        (format!("{}|{}", name, client), MAX_FAILS),
-        (name, MAX_FAILS_ACCOUNT),
+        (format!("lp{}:{}|{}", name.len(), name, client), MAX_FAILS),
+        (format!("la|{}", name), MAX_FAILS_ACCOUNT),
         (format!("\u{0}ip|{}", client), MAX_FAILS_PER_CLIENT),
     ]
 }
@@ -365,10 +387,19 @@ fn record_fail(keys: &[(String, u32)]) {
     if let Ok(mut g) = FAILS.lock() {
         let m = g.get_or_insert_with(HashMap::new);
         if m.len() > 1000 {
-            // 存在しないユーザー名で大量に試されても、メモリが増え続けないよう、古い記録を捨てる
+            // 存在しないユーザー名で大量に試されても、メモリが増え続けないよう、古い記録を捨てる。
+            // 全部を消すと、ロックまで消えて、総当たりの制限をやり直せてしまうので、
+            // 期限切れ → まだ回数の少ないもの → 古いもの、の順に、1000件に収まるまで捨てる
             m.retain(|_, (_, at)| at.elapsed().as_secs() < LOCK_SEC);
             if m.len() > 1000 {
-                m.clear();
+                m.retain(|_, (n, _)| *n >= MAX_FAILS);
+            }
+            if m.len() > 1000 {
+                let mut ages: Vec<(Instant, String)> = m.iter().map(|(k, (_, at))| (*at, k.clone())).collect();
+                ages.sort();
+                for (_, k) in ages.into_iter().take(m.len() - 1000) {
+                    m.remove(&k);
+                }
             }
         }
         for (key, _) in keys {
@@ -731,8 +762,8 @@ pub fn totp_disable(body: &Value) -> ApiResult {
 }
 
 // ---------------------------------------------------------------- ユーザー管理（admin のみ）
-fn admin_count(conn: &Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM users WHERE role='admin'", [], |r| r.get(0)).unwrap_or(0)
+fn admin_count(conn: &Connection) -> Result<i64, ApiErr> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM users WHERE role='admin'", [], |r| r.get(0))?)
 }
 
 fn user_json(conn: &Connection, id: i64) -> Result<Value, ApiErr> {
@@ -866,8 +897,14 @@ pub fn register(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
 }
 
 /// 最初の管理者（いま管理者の中で、いちばん早く作られた人）。削除も降格もできない
-fn first_admin_id(conn: &Connection) -> Option<i64> {
-    conn.query_row("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1", [], |r| r.get(0)).ok()
+/// 読み取りに失敗したときは、保護が外れたことにせず、エラーにして操作を断る
+fn is_protected_admin(conn: &Connection, id: i64) -> Result<bool, ApiErr> {
+    let first: Option<i64> = match conn.query_row("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1", [], |r| r.get(0)) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e.into()),
+    };
+    Ok(first == Some(id) || admin_count(conn)? <= 1)
 }
 
 pub fn update_user(id: i64, body: &Value) -> ApiResult {
@@ -899,7 +936,7 @@ pub fn update_user(id: i64, body: &Value) -> ApiResult {
             .query_row("SELECT role, username FROM users WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|_| err(404, "ユーザーが見つかりません"))?;
         if let Some(r) = &role {
-            if cur_role == "admin" && r != "admin" && (first_admin_id(conn) == Some(id) || admin_count(conn) <= 1) {
+            if cur_role == "admin" && r != "admin" && is_protected_admin(conn, id)? {
                 return Err(err(409, "最初の管理者の権限は変更できません"));
             }
         }
@@ -934,7 +971,7 @@ pub fn delete_user(id: i64) -> ApiResult {
         let (role, name): (String, String) = conn
             .query_row("SELECT role, username FROM users WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|_| err(404, "ユーザーが見つかりません"))?;
-        if role == "admin" && (first_admin_id(conn) == Some(id) || admin_count(conn) <= 1) {
+        if role == "admin" && is_protected_admin(conn, id)? {
             return Err(err(409, "最初の管理者は削除できません"));
         }
         // 登録作品・視聴記録・通知・ログインは、外部キーでまとめて消える
@@ -989,6 +1026,39 @@ mod policy_tests {
     }
 
     #[test]
+    fn login_keys_never_collide_with_other_lock_keys() {
+        // 未認証の相手が、パスワード・認証コード用のキー（\0 で始まる）や、ほかの人の組のキーを、ユーザー名で作れない
+        let hostile = ["\u{0}pw|1", "\u{0}otp|1", "\u{0}ip|1.1.1.1", "bob|1.1.1.1", "la|bob", "lp3:bob|1.1.1.1"];
+        let own: Vec<String> = ["\u{0}pw|1", "\u{0}otp|1", "\u{0}ip|1.1.1.1"].iter().map(|s| s.to_string()).collect();
+        for h in hostile {
+            for (k, _) in limits(h, "9.9.9.9") {
+                assert!(!own.contains(&k), "衝突: {:?}", k);
+            }
+        }
+        let a: Vec<String> = limits("bob", "1.1.1.1").into_iter().map(|(k, _)| k).collect();
+        for h in ["bob|1.1.1.1", "la|bob", "x"] {
+            for (k, _) in limits(h, "2.2.2.2") {
+                assert!(!a[..2].contains(&k), "衝突: {:?}", k);
+            }
+        }
+    }
+
+    #[test]
+    fn failure_map_keeps_locks_when_full() {
+        // 大量の失敗記録があふれても、すでにロックされた記録は消えない
+        let locked_keys = vec![("lock-me".to_string(), MAX_FAILS)];
+        for _ in 0..MAX_FAILS {
+            record_fail(&locked_keys);
+        }
+        assert!(locked(&locked_keys).is_some());
+        for i in 0..3000 {
+            record_fail(&[(format!("spam{}", i), MAX_FAILS)]);
+        }
+        assert!(locked(&locked_keys).is_some(), "ロックが消えてはいけない");
+        assert!(FAILS.lock().unwrap().as_ref().unwrap().len() <= 1001);
+    }
+
+    #[test]
     fn rate_limiter_counts_per_client() {
         for _ in 0..3 {
             assert!(rate_ok("t-bucket", "1.1.1.1", 3, 60));
@@ -1030,7 +1100,7 @@ pub fn cli(args: &[String]) -> i32 {
         return 2;
     }
     let usage = || {
-        eprintln!("使い方:\n  ani-cal user list\n  ani-cal user reset-password <ユーザー名>   新しい仮パスワードを作って表示する（ログインはすべて解除）\n  ani-cal user reset-2fa <ユーザー名>        2段階認証を解除する（ログインはすべて解除）");
+        eprintln!("使い方:\n  ani-cal user list\n  ani-cal user reset-password <ユーザー名>   新しい仮パスワードを作って表示する（ログインはすべて解除）\n  ani-cal user reset-2fa <ユーザー名>        2段階認証を解除する（ログインはすべて解除）\n  ani-cal user create-admin <ユーザー名>     最初の管理者を作る（ユーザーがいないときだけ。仮パスワードを表示）");
         2
     };
     let Some(cmd) = args.first() else { return usage() };
@@ -1039,6 +1109,32 @@ pub fn cli(args: &[String]) -> i32 {
         return 1;
     }
     let conn = db::connect();
+    if cmd == "create-admin" {
+        // 最初の管理者を、サーバーの中から作る（画面からの登録が使えない構成用。ユーザーがまだいないときだけ）
+        let Some(name) = args.get(1) else { return usage() };
+        if check_username(name).is_err() {
+            eprintln!("ユーザー名は、半角英数字と _ . - （32文字以内）にしてください");
+            return 1;
+        }
+        let raw = random_token().replace(['-', '_'], "x");
+        let temp: String = raw.chars().take(16).collect();
+        let Ok(hash) = hash_password(&temp) else { return 1 };
+        let n = conn
+            .execute(
+                "INSERT INTO users(username, password_hash, role, created_at) SELECT ?,?,'admin',? WHERE NOT EXISTS (SELECT 1 FROM users)",
+                params![name, hash, config::now_s()],
+            )
+            .unwrap_or(0);
+        if n != 1 {
+            eprintln!("ユーザーが既にいます。2人目以降は、管理者が招待コードを発行してください");
+            return 1;
+        }
+        adopt_legacy(&conn);
+        println!("{} の仮パスワード: {}", name, temp);
+        println!("ログイン後、すぐにアカウント画面からパスワードを変更してください。");
+        info!("auth", "管理者を CLI で登録しました: {}", clean(name));
+        return 0;
+    }
     if cmd == "list" {
         let rows = db::query_json(&conn, "SELECT username, role, totp_enabled, created_at, last_login_at FROM users ORDER BY id", []).unwrap_or_default();
         for r in rows {

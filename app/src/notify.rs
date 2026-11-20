@@ -25,7 +25,10 @@ const DEFAULT_LEAD_MIN: i64 = 10;
 const MAX_LEAD_MIN: i64 = 1440;
 const GRACE_MIN: i64 = 3; // 開始時刻を過ぎてからでも、この分数以内なら通知する（取得や再起動の遅れ対策）
 /// 購読先として許可する Push サービス（任意URLへサーバーから送信しないため）
-const PUSH_HOSTS: [&str; 4] = ["googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com"];
+const PUSH_HOSTS: [&str; 4] = ["fcm.googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com"];
+
+/// 1人が通知を登録できる端末の数
+const MAX_SUBS_PER_USER: i64 = 20;
 
 static KEY: OnceLock<SecretKey> = OnceLock::new();
 static KEY_LOCK: Mutex<()> = Mutex::new(());
@@ -242,6 +245,14 @@ pub fn subscribe(body: &Value) -> ApiResult {
         if u != auth::uid() && (k1 != p256dh || k2 != auth) {
             return Err(err(409, "この通知の購読は、別のユーザーが使っています"));
         }
+    }
+    // 1人が登録できる端末の数に上限を付ける（購読を大量に作られて、通知の送信と DB が膨らむのを防ぐ）
+    let mine: i64 = conn.query_row("SELECT COUNT(*) FROM push_subs WHERE user_id=?", [auth::uid()], |r| r.get(0))?;
+    let already: bool = conn
+        .query_row("SELECT 1 FROM push_subs WHERE endpoint=? AND user_id=?", params![endpoint, auth::uid()], |r| r.get::<_, i64>(0))
+        .is_ok();
+    if !already && mine >= MAX_SUBS_PER_USER {
+        return Err(err(409, format!("通知を登録できる端末は、1人{}台までです。使っていない端末の通知を止めてください", MAX_SUBS_PER_USER)));
     }
     conn.execute(
         "INSERT INTO push_subs(endpoint,user_id,p256dh,auth,lead_min,created_at) VALUES(?,?,?,?,?,?) \

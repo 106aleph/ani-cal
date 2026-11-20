@@ -858,39 +858,64 @@ pub fn register(body: &Value, client: &str) -> Result<(Value, String), ApiErr> {
     Ok((me_json(&conn, new_id)?, token))
 }
 
+/// 最初の管理者（いま管理者の中で、いちばん早く作られた人）。削除も降格もできない
+fn first_admin_id(conn: &Connection) -> Option<i64> {
+    conn.query_row("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1", [], |r| r.get(0)).ok()
+}
+
 pub fn update_user(id: i64, body: &Value) -> ApiResult {
     require_admin()?;
     let m = body_obj(body);
     let role = opt_str(&m, "role")?;
     let pw = opt_str(&m, "password")?;
-    let conn = db::connect();
-    let (cur_role, name): (String, String) = conn
-        .query_row("SELECT role, username FROM users WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map_err(|_| err(404, "ユーザーが見つかりません"))?;
-    // 認証アプリを失くした人のための、2段階認証の解除
-    if m.get("reset_totp").and_then(|v| v.as_bool()) == Some(true) {
-        clear_totp(&conn, id)?;
-        conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", params![id, if id == uid() { cur().session.unwrap_or_default() } else { String::new() }])?;
-        info!("auth", "2fa reset by admin: {}", name);
-    }
     if let Some(r) = &role {
         check_role(r)?;
-        if cur_role == "admin" && r != "admin" && admin_count(&conn) <= 1 {
-            return Err(err(409, "最後の管理者の権限は変更できません"));
+    }
+    let reset_totp = m.get("reset_totp").and_then(|v| v.as_bool()) == Some(true);
+    let me = uid();
+    let my_session = cur().session.unwrap_or_default();
+    // 重いパスワードの計算は、書き込みの順番を取る前に済ませる
+    let new_hash = match &pw {
+        Some(p) => {
+            let name: String = db::connect()
+                .query_row("SELECT username FROM users WHERE id=?", [id], |r| r.get(0))
+                .map_err(|_| err(404, "ユーザーが見つかりません"))?;
+            check_password(p, &name)?;
+            let _slot = HashSlot::acquire()?;
+            Some(hash_password(p)?)
         }
-        conn.execute("UPDATE users SET role=? WHERE id=?", params![r, id])?;
-        info!("auth", "role changed: {} -> {}", name, r);
-    }
-    if let Some(p) = &pw {
-        check_password(p, &name)?;
-        let _slot = HashSlot::acquire()?;
-        conn.execute("UPDATE users SET password_hash=? WHERE id=?", params![hash_password(p)?, id])?;
-        // 再設定されたユーザーのログインは解除する（自分自身は今の端末だけ残す）
-        let keep = if id == uid() { cur().session.unwrap_or_default() } else { String::new() };
-        conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", params![id, keep])?;
-        info!("auth", "password reset: {}", name);
-    }
-    ok(user_json(&conn, id)?)
+        None => None,
+    };
+    // 確認から更新までを、1つのトランザクション（最初から書き込みの順番を取る）で行う。同時の操作とは順番に処理される
+    db::with_tx(|conn| {
+        let (cur_role, name): (String, String) = conn
+            .query_row("SELECT role, username FROM users WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| err(404, "ユーザーが見つかりません"))?;
+        if let Some(r) = &role {
+            if cur_role == "admin" && r != "admin" && (first_admin_id(conn) == Some(id) || admin_count(conn) <= 1) {
+                return Err(err(409, "最初の管理者の権限は変更できません"));
+            }
+        }
+        // 認証アプリを失くした人のための、2段階認証の解除
+        if reset_totp {
+            clear_totp(conn, id)?;
+            let keep = if id == me { my_session.clone() } else { String::new() };
+            conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", params![id, keep])?;
+            info!("auth", "2fa reset by admin: {}", name);
+        }
+        if let Some(r) = &role {
+            conn.execute("UPDATE users SET role=? WHERE id=?", params![r, id])?;
+            info!("auth", "role changed: {} -> {}", name, r);
+        }
+        if let Some(h) = &new_hash {
+            conn.execute("UPDATE users SET password_hash=? WHERE id=?", params![h, id])?;
+            // 再設定されたユーザーのログインは解除する（自分自身は今の端末だけ残す）
+            let keep = if id == me { my_session.clone() } else { String::new() };
+            conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", params![id, keep])?;
+            info!("auth", "password reset: {}", name);
+        }
+        ok(user_json(conn, id)?)
+    })
 }
 
 pub fn delete_user(id: i64) -> ApiResult {
@@ -898,18 +923,19 @@ pub fn delete_user(id: i64) -> ApiResult {
     if id == uid() {
         return Err(err(409, "自分自身は削除できません"));
     }
-    let conn = db::connect();
-    let (role, name): (String, String) = conn
-        .query_row("SELECT role, username FROM users WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map_err(|_| err(404, "ユーザーが見つかりません"))?;
-    if role == "admin" && admin_count(&conn) <= 1 {
-        return Err(err(409, "最後の管理者は削除できません"));
-    }
-    // 登録作品・視聴記録・通知・ログインは、外部キーでまとめて消える
-    conn.execute("DELETE FROM push_sent WHERE endpoint IN (SELECT endpoint FROM push_subs WHERE user_id=?)", [id])?;
-    conn.execute("DELETE FROM users WHERE id=?", [id])?;
-    info!("auth", "user deleted: {}", name);
-    Ok((204, Value::Null))
+    db::with_tx(|conn| {
+        let (role, name): (String, String) = conn
+            .query_row("SELECT role, username FROM users WHERE id=?", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| err(404, "ユーザーが見つかりません"))?;
+        if role == "admin" && (first_admin_id(conn) == Some(id) || admin_count(conn) <= 1) {
+            return Err(err(409, "最初の管理者は削除できません"));
+        }
+        // 登録作品・視聴記録・通知・ログインは、外部キーでまとめて消える
+        conn.execute("DELETE FROM push_sent WHERE endpoint IN (SELECT endpoint FROM push_subs WHERE user_id=?)", [id])?;
+        conn.execute("DELETE FROM users WHERE id=?", [id])?;
+        info!("auth", "user deleted: {}", name);
+        Ok((204, Value::Null))
+    })
 }
 
 #[cfg(test)]

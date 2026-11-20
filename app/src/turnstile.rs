@@ -1,4 +1,4 @@
-//! Cloudflare Turnstile（人間かどうかの確認）。管理画面でキーを設定したときだけ有効
+//! Cloudflare Turnstile（ボットプロテクション）。管理画面でキーを設定したときだけ有効
 //! ログイン・新規登録の前に、画面が取った確認トークンを Cloudflare に問い合わせて確かめる
 use crate::util::*;
 use crate::{auth, config, db, info, warn};
@@ -103,7 +103,7 @@ pub fn check(body: &Value, client: &str) -> Result<(), ApiErr> {
     let Some(k) = keys() else { return Ok(()) };
     let token = opt_str(&body_obj(body), "turnstile").ok().flatten().unwrap_or_default();
     if token.is_empty() || token.len() > MAX_TOKEN_LEN {
-        return Err(err(400, "人間かどうかの確認が終わっていません。表示が完了するまで待ってから、もう一度お試しください"));
+        return Err(err(400, "ボットプロテクションの確認が終わっていません。表示が完了するまで待ってから、もう一度お試しください"));
     }
     let Some(_slot) = Slot::acquire() else {
         return Err(err(503, "混み合っています。しばらく待ってからやり直してください"));
@@ -117,7 +117,7 @@ pub fn check(body: &Value, client: &str) -> Result<(), ApiErr> {
     };
     if resp["success"].as_bool() != Some(true) {
         warn!("auth", "turnstile rejected: ip={} codes={}", auth::clean(client), auth::clean(&resp["error-codes"].to_string()));
-        return Err(err(400, "人間かどうかの確認に失敗しました。もう一度お試しください"));
+        return Err(err(400, "ボットプロテクションの確認に失敗しました。もう一度お試しください"));
     }
     // 別のサイトで取られたトークンの使い回しを防ぐ（ALLOWED_HOSTS があるときだけ照合できる）
     let allowed = &config::get().allowed_hosts;
@@ -125,7 +125,7 @@ pub fn check(body: &Value, client: &str) -> Result<(), ApiErr> {
         let host = resp["hostname"].as_str().unwrap_or("").to_lowercase();
         if !allowed.contains(&host) && host != "127.0.0.1" && host != "localhost" {
             warn!("auth", "turnstile hostname mismatch: ip={} host={}", auth::clean(client), auth::clean(&host));
-            return Err(err(400, "人間かどうかの確認に失敗しました。もう一度お試しください"));
+            return Err(err(400, "ボットプロテクションの確認に失敗しました。もう一度お試しください"));
         }
     }
     Ok(())
@@ -200,7 +200,7 @@ pub fn cli(args: &[String]) -> i32 {
         return 2;
     }
     let Some(cmd) = args.first() else {
-        eprintln!("使い方:\n  ani-cal turnstile status   設定を表示する\n  ani-cal turnstile off      人間確認を無効にする");
+        eprintln!("使い方:\n  ani-cal turnstile status   設定を表示する\n  ani-cal turnstile off      ボットプロテクションを無効にする");
         return 2;
     };
     if !std::path::Path::new(&config::get().db_path).exists() {

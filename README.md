@@ -40,7 +40,7 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
 | 登録作品 | 話数一覧、視聴チェック、話の追加・編集・削除、媒体の変更、タイトルの上書き、間隔指定での話の作成、一括視聴。次の配信が近い順に並び、作品名の横に放送時期を表示 |
 | 視聴済み | 全話視聴した作品の置き場。「視聴済みに移す」で移動、「登録作品に戻す」で復帰。新しい話が追加されると自動で戻る |
 | 視聴中断 | 途中で見るのをやめた作品の置き場。「視聴中断」で移動、「登録作品に戻す」で復帰。自動では戻らない |
-| 管理 (管理者だけ) | しょぼいカレンダーの取得 (今すぐ取得・期間指定・中断。期間指定は今日の回数と残りを表示)、ユーザーと招待コードの管理、人間確認 (Turnstile) の設定、取得履歴 |
+| 管理 (管理者だけ) | しょぼいカレンダーの取得 (今すぐ取得・期間指定・中断。期間指定は今日の回数と残りを表示)、ユーザーと招待コードの管理、ボットプロテクション (Turnstile) の設定、取得履歴 |
 
 - 画面上部の「最終取得」の横に、取得済みの期間を表示します。
 - 視聴済み・視聴中断の作品は、カレンダー・未視聴・通知に出ません。
@@ -74,7 +74,7 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
    - `ALLOWED_HOSTS=cal.example.com`: 別のホスト名での要求を断ります (カンマ区切り)。
    - `REQUIRE_2FA=admin` (既定) / `all` / `off`: 2段階認証を必須にする対象です。公開するなら `all` を推奨します。
    - `COOKIE_SECURE=1`: プロキシが `X-Forwarded-Proto: https` を付けないときだけ必要です。
-4. 必要なら、「管理」タブの「人間確認」で Cloudflare Turnstile を設定します。Cloudflare のダッシュボードでウィジェットを作り、サイトキーとシークレットキーを入力します。保存すると、ログインと新規登録に人間確認が付きます。tailnet だけで使うなら不要です。
+4. 必要なら、「管理」タブの「ボットプロテクション」で Cloudflare Turnstile を設定します。Cloudflare のダッシュボードでウィジェットを作り、サイトキーとシークレットキーを入力します。保存すると、ログインと新規登録にボットプロテクションが付きます。tailnet だけで使うなら不要です。
 5. 回数制限は、`X-Forwarded-For` の**右端**を接続元として数えます。プロキシがこの値に接続元を追記することを確認してください (一般的なプロキシは追記します)。
 
 **Cloudflare Tunnel で公開する場合**
@@ -87,7 +87,7 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
 7. 緊急時は、`sudo systemctl stop cloudflared` で公開を止めます。Turnstile で入れなくなったときは、「運用」の `turnstile off` を使います。
 
 **入れている対策**
-- **認証**: パスワードは Argon2id で保存します。10文字以上で、ユーザー名を含むものや定番のものは使えません。ログインに失敗すると、次の上限で5分間止まります (接続元とユーザー名の組で5回、ユーザー名で20回、接続元で30回)。2段階認証 (TOTP) に対応し、管理者は既定で必須です。Turnstile を設定すると、人間確認を通らない要求は、パスワードの照合や失敗の回数に入る前に断ります。シークレットキーは DB に保存し、画面には表示しません。設定と無効化には、パスワードの確認が要ります。
+- **認証**: パスワードは Argon2id で保存します。10文字以上で、ユーザー名を含むものや定番のものは使えません。ログインに失敗すると、次の上限で5分間止まります (接続元とユーザー名の組で5回、ユーザー名で20回、接続元で30回)。2段階認証 (TOTP) に対応し、管理者は既定で必須です。Turnstile を設定すると、ボットプロテクションを通らない要求は、パスワードの照合や失敗の回数に入る前に断ります。シークレットキーは DB に保存し、画面には表示しません。設定と無効化には、パスワードの確認が要ります。
 - **セッション**: Cookie は HttpOnly・SameSite=Lax です (https では Secure と `__Host-` も付きます)。DB には SHA-256 だけを保存します。セッションは、作成から90日で必ず失効します。パスワードの変更や、2段階認証のオン・オフを切り替えたときは、ほかの端末のログインを解除します。
 - **登録**: 最初のユーザーが管理者になり、以後は招待コード制です。権限は、招待コードの発行時に選びます。
 - **Web**: 状態を変える要求は、同一オリジンかつ JSON のものだけ受け付けます (CSRF 対策)。CSP・HSTS・`X-Frame-Options` などのヘッダも付けます。本文の上限は 256KB (認証まわりは 8KB) です。Turnstile を使うときだけ、CSP で `challenges.cloudflare.com` の script と枠を許可します。
@@ -147,7 +147,7 @@ docker compose exec -u app app ani-cal user reset-2fa <ユーザー名>       # 
 Turnstile のキーを誤って、だれもログインできなくなったときは、次で無効にします (10秒ほどで反映)。
 
 ```bash
-docker compose exec -u app app ani-cal turnstile off      # 人間確認を無効にする
+docker compose exec -u app app ani-cal turnstile off      # ボットプロテクションを無効にする
 docker compose exec -u app app ani-cal turnstile status   # 設定の確認
 ```
 
@@ -173,7 +173,7 @@ Rust 1.89 以上が必要です。画面 (`app/static/`) はビルド時にバ�
 | GET/DELETE | `/api/auth/sessions` / `/api/auth/sessions/{id}` | ログイン中の端末の一覧／1つをログアウト |
 | GET/POST/DELETE | `/api/invites` | 招待コードの一覧・発行・取り消し (admin) |
 | GET/PATCH/DELETE | `/api/users` | ユーザー管理 (admin) |
-| GET/POST | `/api/turnstile` / `/api/turnstile/disable` | 人間確認の状態／設定／無効化 (admin。設定・無効化はパスワードが必要) |
+| GET/POST | `/api/turnstile` / `/api/turnstile/disable` | ボットプロテクションの状態／設定／無効化 (admin。設定・無効化はパスワードが必要) |
 | GET | `/api/health` / `/api/status` | 稼働確認／取得状況 |
 | POST | `/api/sync` / `/api/sync/cancel` | 取得の開始 (`{start, end}` で期間指定)／中断 (admin) |
 | GET | `/api/logs` / `/api/coverage` | 取得履歴／取得済みの期間 (admin) |

@@ -144,7 +144,7 @@ function setLoginMode(mode) {
   tsSetup();
 }
 
-/* Cloudflare Turnstile（人間かどうかの確認）。サーバーにキーの設定があるときだけ、ログイン・新規登録で使う */
+/* Cloudflare Turnstile（ボットプロテクション）。サーバーにキーの設定があるときだけ、ログイン・新規登録で使う */
 let tsKey = null, tsWidget, tsToken = '', tsLoading = null;
 function tsLoad() {
   if (!tsLoading) {
@@ -153,7 +153,7 @@ function tsLoad() {
       s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
       s.async = true;
       s.onload = resolve;
-      s.onerror = () => { tsLoading = null; reject(new Error('人間確認の部品を読み込めませんでした。通信を確認して、再読み込みしてください')); };
+      s.onerror = () => { tsLoading = null; reject(new Error('ボットプロテクションの部品を読み込めませんでした。通信を確認して、再読み込みしてください')); };
       document.head.append(s);
     });
   }
@@ -170,7 +170,7 @@ async function tsSetup() {
       sitekey: tsKey, theme: 'auto',
       callback: t => { tsToken = t; },
       'expired-callback': () => { tsToken = ''; },
-      'error-callback': () => { tsToken = ''; $('#login-err').textContent = '人間確認でエラーが起きました。再読み込みしてください'; },
+      'error-callback': () => { tsToken = ''; $('#login-err').textContent = 'ボットプロテクションでエラーが起きました。再読み込みしてください'; },
     });
   } catch (e) {
     tsWidget = undefined;
@@ -375,7 +375,7 @@ let tsState = { enabled: false, site_key: null };
 async function renderTurnstilePanel() {
   tsState = await api('/api/turnstile');
   const st = $('#admin-turnstile-status');
-  st.textContent = tsState.enabled ? `オン（サイトキー: ${tsState.site_key}）。ログイン・新規登録で人間確認をします。` : 'オフ';
+  st.textContent = tsState.enabled ? `オン（サイトキー: ${tsState.site_key}）。ログイン・新規登録でボットプロテクションを使います。` : 'オフ';
   st.className = 'small ' + (tsState.enabled ? '' : 'muted');
   $('#turnstile-edit').textContent = tsState.enabled ? '変更する' : '設定する';
   $('#turnstile-off').hidden = !tsState.enabled;
@@ -384,7 +384,7 @@ function bindTurnstilePanel() {
   const warn = '<p class="muted small">キーを誤ると、ログインできなくなります。このあとログインが残っている間は、この画面から直せます。ログインできなくなったときは、ホストで <code>docker compose exec -u app app ani-cal turnstile off</code> を実行してください。</p>';
   $('#turnstile-edit').addEventListener('click', guard(async () => {
     const r = await formDialog({
-      title: '人間確認の設定', submit: '保存',
+      title: 'ボットプロテクションの設定', submit: '保存',
       html: warn,
       fields: [
         { name: 'site_key', label: 'サイトキー', required: true, value: tsState.site_key || '' },
@@ -394,18 +394,18 @@ function bindTurnstilePanel() {
     });
     if (r.action !== 'ok') return;
     await api('/api/turnstile', { method: 'POST', body: r.values });
-    toast('人間確認を設定しました');
+    toast('ボットプロテクションを設定しました');
     await renderTurnstilePanel();
   }));
   $('#turnstile-off').addEventListener('click', guard(async () => {
     const r = await formDialog({
-      title: '人間確認を無効にする', submit: '無効にする',
-      html: '<p class="muted small">ログイン・新規登録で、人間確認をしなくなります。</p>',
+      title: 'ボットプロテクションを無効にする', submit: '無効にする',
+      html: '<p class="muted small">ログイン・新規登録で、ボットプロテクションを使わなくなります。</p>',
       fields: [{ name: 'password', label: '現在のパスワード', type: 'password', required: true }],
     });
     if (r.action !== 'ok') return;
     await api('/api/turnstile/disable', { method: 'POST', body: r.values });
-    toast('人間確認を無効にしました');
+    toast('ボットプロテクションを無効にしました');
     await renderTurnstilePanel();
   }));
 }
@@ -1294,7 +1294,7 @@ function init() {
       const reg = loginMode === 'register', setup = loginMode === 'setup';
       if ((reg || setup) && $('#login-pass').value !== $('#login-pass2').value) throw new Error('パスワード（確認）が一致しません');
       const useTs = !!tsKey && !setup;
-      if (useTs && !tsToken) throw new Error('人間かどうかの確認が終わるまで、少し待ってください');
+      if (useTs && !tsToken) throw new Error('ボットプロテクションの確認が終わるまで、少し待ってください');
       sent = useTs;
       const r = await api(setup ? '/api/auth/setup' : reg ? '/api/auth/register' : '/api/auth/login', {
         method: 'POST',

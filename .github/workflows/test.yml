@@ -1,0 +1,45 @@
+# テストと回帰テスト（実際にサーバーを起動して、診断で見つかった問題が再発しないか確かめる）。
+# あわせて、一部を修正した tiny_http（app/vendor/tiny_http）が、上流から想定外にずれていないか・上流に新しい版が出ていないかを確かめる
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - name: 単体テスト
+        run: cargo test --locked
+      - name: ビルド
+        run: cargo build --locked
+      - name: 回帰テスト
+        run: bash tests/regression.sh target/debug/ani-cal
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 上流の tiny_http との差分を確かめる
+        run: |
+          mkdir /tmp/up && curl -sfL https://static.crates.io/crates/tiny_http/tiny_http-0.12.0.crate | tar xz -C /tmp/up
+          changed=$(diff -rq /tmp/up/tiny_http-0.12.0/src app/vendor/tiny_http/src | sed 's|.*/vendor/tiny_http/src/||; s| differ||; s|Files .* and ||' | sort | tr '\n' ' ')
+          echo "変更されているファイル: $changed"
+          expected="client.rs request.rs test.rs util/equal_reader.rs util/mod.rs "
+          if [ "$changed" != "$expected" ]; then
+            echo "::error::vendor/tiny_http の変更が、PATCHES.md に書いたものと違います"; exit 1
+          fi
+      - name: 上流に新しい版が出ていないか確かめる
+        run: |
+          latest=$(curl -sf https://crates.io/api/v1/crates/tiny_http -H 'User-Agent: ani-cal-ci' | grep -o '"max_stable_version":"[^"]*"' | cut -d'"' -f4)
+          echo "上流の最新: $latest"
+          if [ -n "$latest" ] && [ "$latest" != "0.12.0" ]; then
+            echo "::warning::tiny_http に新しい版($latest)が出ています。セキュリティ修正を含むか確認して、app/vendor/tiny_http を更新してください"
+          fi

@@ -76,6 +76,8 @@ docker compose up -d --build      # 初回取得は数分 (docker compose logs -
    - `COOKIE_SECURE=1`: プロキシが `X-Forwarded-Proto: https` を付けないときだけ必要です。
 4. 必要なら、「管理」タブの「Botプロテクション」で Cloudflare Turnstile を設定します。Cloudflare のダッシュボードでウィジェットを作り、サイトキーとシークレットキーを入力します。保存すると、ログインと新規登録にBotプロテクションが付きます。確認のときは、ウィジェットを表示したページのホスト名を、`ALLOWED_HOSTS`（未設定なら、その要求の Host）と照合します。tailnet だけで使うなら不要です。
 5. 回数制限は、`X-Forwarded-For` の**右端**を接続元として数えます。プロキシがこの値に接続元を追記することを確認してください (一般的なプロキシは追記します)。この値は、信頼するプロキシ (既定は、同じ機械と Docker・家庭内などの私的なアドレス) から来た要求のものだけ使い、それ以外は直接の接続元で数えます。プロキシが別のホストにあるときは、`TRUSTED_PROXIES` にそのアドレスを入れます（入れないと、`X-Forwarded-For` と `X-Forwarded-Proto` が無視されて、接続元がプロキシのアドレスになり、Cookie にも Secure が付きません）。既定は私的なアドレス全体を信頼するので、同じ LAN の機器が直接つなげる構成では、`TRUSTED_PROXIES` をプロキシのアドレスだけにしてください。
+6. ヘッダを1バイトずつ送り続ける接続は、アプリ単体では止められません (無通信は15秒で切れます)。前段のプロキシで、ヘッダの受信の制限時間と、接続数の上限を設定してください (Cloudflare Tunnel・Tailscale は、プロキシ側で対処されます。Caddy は `timeouts`、nginx は `client_header_timeout` と `limit_conn`)。
+7. プロキシが同じ機械・Docker の中にあるなら、`TRUSTED_PROXIES` は既定のままで動きます。同じ LAN の機器が、アプリに直接つなげる構成では、プロキシのアドレスだけにしてください (Docker は、ゲートウェイのアドレス。`docker network inspect` で確認できます)。プロキシが別のホストにあるときは、そのアドレスを入れたうえで、`COOKIE_SECURE=1` も設定してください。
 
 **Cloudflare Tunnel で公開する場合**
 1. `ALLOWED_HOSTS` には、公開するホスト名に加えて、tailnet のホスト名も入れます。入れないと、tailnet からのアクセスが断られます。
@@ -157,6 +159,8 @@ docker compose exec -u app app ani-cal turnstile status   # 設定の確認
 ```bash
 cd app
 DB_PATH=./dev.db BIND=127.0.0.1:8000 cargo run   # http://127.0.0.1:8000/
+cargo test                                       # 単体テスト
+cargo build && bash tests/regression.sh target/debug/ani-cal   # 回帰テスト (サーバーを起動して、HTTP で確かめる。curl が要る)
 ```
 
 Rust 1.89 以上が必要です。画面 (`app/static/`) はビルド時にバイナリへ埋め込むので、変更したら再ビルドしてください。 HTTP サーバー (tiny_http) は、一部を修正した写しを `app/vendor/tiny_http` に置いています (内容は `PATCHES.md`)。

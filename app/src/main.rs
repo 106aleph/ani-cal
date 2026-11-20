@@ -17,6 +17,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, OnceLock};
 use tiny_http::{Header, Method, Request, Response, Server};
 
+/// 接続の読み書きの待ち時間（秒）。ヘッダや本文を、これより長く止めながら送る接続は切る。
+/// 何も流れない接続（keep-alive の待ち）も、この時間で閉じる
+const SOCKET_TIMEOUT_SEC: i64 = 15;
+/// 本文を読み終えるまでの、合計の制限時間（秒）。本文は最大 256KB で、通常は一瞬で届く
+const BODY_DEADLINE_SEC: u64 = 15;
+
 struct Asset {
     path: &'static str,
     mime: &'static str,
@@ -127,6 +133,73 @@ fn client_id(rq: &Request) -> String {
     peer.map(|ip| ip.to_string()).unwrap_or_default()
 }
 
+/// 待ち受けの口に、読み書きの待ち時間（秒）を設定する。accept した接続は、この設定を引き継ぐ（Linux）。
+/// 何も送らない・少しずつしか送らない接続が、いつまでも居座るのを防ぐ。
+/// tiny_http には待ち時間の設定がないので、ソケットに直接設定する。待ち時間を過ぎると、接続は閉じられる
+fn set_socket_timeouts(l: &std::net::TcpListener, secs: i64) {
+    use std::os::fd::AsRawFd;
+    let tv = libc::timeval { tv_sec: secs as libc::time_t, tv_usec: 0 };
+    for opt in [libc::SO_RCVTIMEO, libc::SO_SNDTIMEO] {
+        // SAFETY: fd は生きている TcpListener のもの。tv は有効な timeval で、大きさも合っている
+        let r = unsafe {
+            libc::setsockopt(
+                l.as_raw_fd(),
+                libc::SOL_SOCKET,
+                opt,
+                &tv as *const libc::timeval as *const libc::c_void,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            )
+        };
+        if r != 0 {
+            warn!("app", "ソケットの待ち時間を設定できませんでした: {}", std::io::Error::last_os_error());
+        }
+    }
+}
+
+/// 待ち受けの口に待ち時間を設定すると、新しい接続が長く来ないときに accept も時間切れになり、
+/// tiny_http はそれを致命的な失敗として、受け付けをやめてしまう。それを避けるため、待ち時間より短い間隔で、
+/// 自分自身に空の接続をして、accept を起こし続ける（空の接続は、すぐに閉じられる）
+fn keep_accepting(l: &std::net::TcpListener) {
+    let Ok(mut addr) = l.local_addr() else { return };
+    if addr.ip().is_unspecified() {
+        addr.set_ip(if addr.is_ipv4() { std::net::Ipv4Addr::LOCALHOST.into() } else { std::net::Ipv6Addr::LOCALHOST.into() });
+    }
+    std::thread::Builder::new()
+        .name("accept-wake".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs((SOCKET_TIMEOUT_SEC as u64 / 4).max(1)));
+            let _ = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2));
+        })
+        .ok();
+}
+
+/// 本文を、全体の制限時間つきで読む。1回の読み取りは上の待ち時間で切れるが、1バイトずつ送り続ける相手には、
+/// それだけでは足りないので、読み始めてからの合計も制限する。時間切れ・読み取りの失敗は None
+fn read_body(rq: &mut Request, limit: usize) -> Option<String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(BODY_DEADLINE_SEC);
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let reader = rq.as_reader();
+    loop {
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        // 上限(+1)までしか読まない
+        let want = chunk.len().min(limit + 1 - buf.len());
+        if want == 0 {
+            break;
+        }
+        match reader.read(&mut chunk[..want]) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    // 以前の read_to_string と同じく、UTF-8 として読めなければ空にする
+    Some(String::from_utf8(buf).unwrap_or_default())
+}
+
 fn is_json(rq: &Request) -> bool {
     req_header(rq, "Content-Type").map(|v| v.trim().to_lowercase().starts_with("application/json")).unwrap_or(false)
 }
@@ -180,6 +253,10 @@ fn respond_json_cookie(rq: Request, status: u16, body: &Value, cookie: Option<St
             .with_status_code(status)
             .with_header(header("Content-Type", "application/json"))
             .with_header(header("Cache-Control", "no-store"));
+        // 本文を受け取りきれなかった・断った要求は、残りを読み捨てて待たずに、接続ごと閉じる
+        if status == 408 || status == 413 {
+            r = r.with_header(header("Connection", "close"));
+        }
         if let Some(c) = &cookie {
             r = r.with_header(header("Set-Cookie", c));
         }
@@ -275,7 +352,10 @@ fn handle(mut rq: Request) {
         if rq.body_length().unwrap_or(0) > limit {
             return respond_json(rq, 413, &util::msg("リクエストが大きすぎます"));
         }
-        let _ = rq.as_reader().take(limit as u64 + 1).read_to_string(&mut raw);
+        let Some(b) = read_body(&mut rq, limit) else {
+            return respond_json(rq, 408, &util::msg("リクエストの受信に時間がかかりすぎました"));
+        };
+        raw = b;
         if raw.len() > limit {
             return respond_json(rq, 413, &util::msg("リクエストが大きすぎます"));
         }
@@ -410,7 +490,10 @@ fn main() {
     std::thread::Builder::new().name("warm".into()).spawn(api::warm_catalog).ok(); // 作品一覧の集計を先に作る
     notify::start();
 
-    let server = Arc::new(Server::http(&cfg.bind).unwrap_or_else(|e| panic!("{} で待ち受けできません: {}", cfg.bind, e)));
+    let listener = std::net::TcpListener::bind(&cfg.bind).unwrap_or_else(|e| panic!("{} で待ち受けできません: {}", cfg.bind, e));
+    set_socket_timeouts(&listener, SOCKET_TIMEOUT_SEC);
+    keep_accepting(&listener);
+    let server = Arc::new(Server::from_listener(listener, None).unwrap_or_else(|e| panic!("{} で待ち受けできません: {}", cfg.bind, e)));
     info!("app", "listening on {}", cfg.bind);
     let mut workers = vec![];
     for i in 0..8 {

@@ -65,6 +65,7 @@ dependencies = [
  "fastrand",
  "hkdf",
  "hmac",
+ "libc",
  "p256",
  "qrcode",
  "rand_core",

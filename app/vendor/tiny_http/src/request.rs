@@ -14,8 +14,7 @@ use std::str::FromStr;
 use std::sync::mpsc::Sender;
 
 use crate::util::{EqualReader, FusedReader};
-use crate::{HTTPVersion, Header, Method, Response, StatusCode};
-use chunked_transfer::Decoder;
+use crate::{HTTPVersion, Header, Method, Response};
 
 /// Represents an HTTP request made by a client.
 ///
@@ -75,9 +74,6 @@ pub struct Request {
 
     body_length: Option<usize>,
 
-    // true if a `100 Continue` response must be sent when `as_reader()` is called
-    must_send_continue: bool,
-
     // If Some, a message must be sent after responding
     notify_when_responded: Option<Sender<()>>,
 }
@@ -111,6 +107,9 @@ impl<R> Drop for NotifyOnDrop<R> {
 pub enum RequestCreationError {
     /// The client sent an `Expect` header that was not recognized by tiny-http.
     ExpectationFailed,
+
+    /// 本文が `Transfer-Encoding: chunked`（長さが先に分からない）。受け付けない（411）。
+    LengthRequired,
 
     /// Error while reading data from the socket during the creation of the `Request`.
     CreationIoError(IoError),
@@ -160,6 +159,9 @@ where
             if !te.value.as_str().trim().eq_ignore_ascii_case("chunked") {
                 return bad("unsupported transfer-encoding");
             }
+            // chunked は受け付けない。chunk-size 行や extension には長さの上限が無く、メモリとワーカーを
+            // 無期限に取られるため。本文は Content-Length で送ってもらう
+            return Err(RequestCreationError::LengthRequired);
         }
         if let Some(cl) = cls.first() {
             let v = cl.value.as_str().trim();
@@ -169,36 +171,16 @@ where
         }
     }
 
-    // finding the transfer-encoding header
-    let transfer_encoding = headers
+    // finding the content-length header（Transfer-Encoding があれば、上で断っている）
+    let content_length: Option<usize> = headers
         .iter()
-        .find(|h: &&Header| h.field.equiv("Transfer-Encoding"))
-        .map(|h| h.value.clone());
+        .find(|h: &&Header| h.field.equiv("Content-Length"))
+        .and_then(|h| FromStr::from_str(h.value.as_str()).ok());
 
-    // finding the content-length header
-    let content_length: Option<usize> = if transfer_encoding.is_some() {
-        // if transfer-encoding is specified, the Content-Length
-        // header must be ignored (RFC2616 #4.4)
-        None
-    } else {
-        headers
-            .iter()
-            .find(|h: &&Header| h.field.equiv("Content-Length"))
-            .and_then(|h| FromStr::from_str(h.value.as_str()).ok())
-    };
-
-    // true if the client sent a `Expect: 100-continue` header
-    let expects_continue = {
-        match headers
-            .iter()
-            .find(|h: &&Header| h.field.equiv("Expect"))
-            .map(|h| h.value.as_str())
-        {
-            None => false,
-            Some(v) if v.eq_ignore_ascii_case("100-continue") => true,
-            _ => return Err(RequestCreationError::ExpectationFailed),
-        }
-    };
+    // Expect は 100-continue も断る。本文を送らずに待たせて、ワーカーを15秒占有できてしまうため
+    if headers.iter().any(|h: &Header| h.field.equiv("Expect")) {
+        return Err(RequestCreationError::ExpectationFailed);
+    }
 
     // true if the client sent a `Connection: upgrade` header
     let connection_upgrade = {
@@ -220,7 +202,7 @@ where
     } else if let Some(content_length) = content_length {
         if content_length == 0 {
             Box::new(io::empty()) as Box<dyn Read + Send + 'static>
-        } else if content_length <= MAX_BUFFERED_BODY && !expects_continue {
+        } else if content_length <= MAX_BUFFERED_BODY {
             // if the content-length is small enough, we just read everything into a buffer
 
             // 宣言された大きさの配列を先に確保せず、届いた分だけ伸ばす（送らずに居座る接続が、メモリを取り続けないように）
@@ -255,10 +237,6 @@ where
             };
             Box::new(FusedReader::new(data_reader)) as Box<dyn Read + Send + 'static>
         }
-    } else if transfer_encoding.is_some() {
-        // if a transfer-encoding was specified, then "chunked" is ALWAYS applied
-        // over the message (RFC2616 #3.6)
-        Box::new(crate::util::DrainOnDrop::new(FusedReader::new(Decoder::new(source_data)), state)) as Box<dyn Read + Send + 'static>
     } else {
         // if we have neither a Content-Length nor a Transfer-Encoding,
         // assuming that we have no data
@@ -276,7 +254,6 @@ where
         http_version: version,
         headers,
         body_length: content_length,
-        must_send_continue: expects_continue,
         notify_when_responded: None,
     })
 }
@@ -395,23 +372,8 @@ impl Request {
     /// # }
     /// ```
     ///
-    /// If the client sent a `Expect: 100-continue` header with the request, calling this
-    ///  function will send back a `100 Continue` response.
     #[inline]
     pub fn as_reader(&mut self) -> &mut dyn Read {
-        if self.must_send_continue {
-            let msg = Response::new_empty(StatusCode(100));
-            msg.raw_print(
-                self.response_writer.as_mut().unwrap().by_ref(),
-                self.http_version.clone(),
-                &self.headers,
-                true,
-                None,
-            )
-            .ok();
-            self.response_writer.as_mut().unwrap().flush().ok();
-            self.must_send_continue = false;
-        }
 
         self.data_reader.as_mut().unwrap()
     }

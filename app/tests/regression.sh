@@ -46,10 +46,6 @@ body=$(printf 'GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n'; head -c 494
 exec 5<>/dev/tcp/127.0.0.1/$PORT
 { printf "POST /api/auth/login HTTP/1.1\r\n${H}Content-Type: text/plain\r\nContent-Length: ${#body}\r\n\r\n"; printf '%s' "$body"; printf "GET /api/health HTTP/1.1\r\n${H}Connection: close\r\n\r\n"; } >&5
 chk "Content-Length の読み残し（応答は415と200の2つだけ）" "$(count 5)" 2; exec 5>&-
-b2='GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n'; len=$(printf "$b2" | wc -c)
-exec 6<>/dev/tcp/127.0.0.1/$PORT
-{ printf "POST /api/auth/login HTTP/1.1\r\n${H}Content-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n" "$len"; printf "$b2"; printf "\r\n0\r\n\r\nGET /api/health HTTP/1.1\r\n${H}Connection: close\r\n\r\n"; } >&6
-chk "chunked の読み残し（接続を閉じる。応答は1つだけ）" "$(count 6)" 1; exec 6>&-
 
 echo "巨大な Content-Length でも落ちない"
 exec 7<>/dev/tcp/127.0.0.1/$PORT
@@ -135,7 +131,15 @@ else
   echo "  skip（sqlite3 も python3 も無い）"
 fi
 
-echo "L-1 chunked で JSON 以外を送れない"
-chk "text/plain の chunked は 415" "$(code -b "$DIR/c1" -H 'Content-Type: text/plain' -H 'Transfer-Encoding: chunked' -d '{}' $B/api/sync)" 415
+echo "L-1 chunked / Expect は、本文を読む前に断る"
+chk "chunked は 411" "$(raw "POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n")" "HTTP/1.1 411 Length Required"
+chk "Expect: 100-continue は 417" "$(raw "POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nExpect: 100-continue\r\n\r\n")" "HTTP/1.1 417 Expectation Failed"
+
+echo "N-8 終わらない chunk-size 行（CRLF なし）を送り続けても、メモリを使わず、ワーカーも占有しない"
+DRIP=(); for _ in $(seq 1 12); do ( exec 8<>/dev/tcp/127.0.0.1/$PORT; printf "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n1;" >&8; for _ in 1 2 3 4 5 6 7 8; do printf a >&8 2>/dev/null; sleep 1; done ) & DRIP+=($!); done
+sleep 3
+t=$(curl -s -o /dev/null -m 3 -w '%{time_total}' $B/api/health)
+chk "攻撃中も、1秒以内に応答する" "$(awk -v t="$t" 'BEGIN{print (t<1.0)?"fast":"slow"}')" fast
+wait "${DRIP[@]}"
 
 [ $FAIL = 0 ] && echo "すべて通りました" || { echo "失敗があります"; exit 1; }

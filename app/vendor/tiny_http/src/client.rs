@@ -52,6 +52,8 @@ enum ReadError {
     WrongHeader(HTTPVersion),
     /// the client sent an unrecognized `Expect` header
     ExpectationFailed(HTTPVersion),
+    /// chunked は受け付けない（411）
+    LengthRequired(HTTPVersion),
     ReadIoError(IoError),
 }
 
@@ -194,6 +196,7 @@ impl ClientConnection {
                 request::RequestCreationError::ExpectationFailed => {
                     ReadError::ExpectationFailed(version)
                 }
+                request::RequestCreationError::LengthRequired => ReadError::LengthRequired(version),
             }
         })?;
 
@@ -251,6 +254,13 @@ impl Iterator for ClientConnection {
                     let response = Response::new_empty(StatusCode(417));
                     response.raw_print(writer, ver, &[], true, None).ok();
                     return None; // TODO: should be recoverable, but needs handling in case of body
+                }
+
+                Err(ReadError::LengthRequired(ver)) => {
+                    let writer = self.sink.next().unwrap();
+                    let response = Response::new_empty(StatusCode(411));
+                    response.raw_print(writer, ver, &[], true, None).ok();
+                    return None; // 本文は読まずに、接続を閉じる
                 }
 
                 Err(ReadError::ReadIoError(ref err)) if err.kind() == ErrorKind::InvalidData => {
@@ -356,7 +366,7 @@ const MAX_DRAIN_TIME: std::time::Duration = std::time::Duration::from_secs(10);
 impl ClientConnection {
     /// 次の要求を読む前に、前の要求の本文の読み残しを片付ける。
     /// ここ（接続ごとのスレッド）で行うので、要求を処理するスレッドは、遅い送信者に待たされない。
-    /// 読み捨てが上限（量・時間）を超えたり、読み捨てられない読み残し（chunked）があるときは、この接続を閉じる
+    /// 読み捨てが上限（量・時間）を超えたときは、この接続を閉じる
     fn finish_previous(&mut self) -> IoResult<()> {
         use std::sync::atomic::Ordering;
         // 前の要求が終わるまで、ここで待つ（次の要求の最初の1バイトが読める＝前の本文の読み手が手放した）
@@ -364,9 +374,6 @@ impl ClientConnection {
             Some(b) => b?,
             None => return Err(IoError::new(ErrorKind::ConnectionAborted, "Unexpected EOF")),
         };
-        if self.state.poisoned.load(Ordering::SeqCst) {
-            return Err(IoError::new(ErrorKind::ConnectionAborted, "unread body"));
-        }
         let remaining = self.state.drain_remaining.swap(0, Ordering::SeqCst);
         if remaining == 0 {
             self.pending_byte = Some(first);

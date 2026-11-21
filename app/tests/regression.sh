@@ -142,4 +142,12 @@ t=$(curl -s -o /dev/null -m 3 -w '%{time_total}' $B/api/health)
 chk "攻撃中も、1秒以内に応答する" "$(awk -v t="$t" 'BEGIN{print (t<1.0)?"fast":"slow"}')" fast
 wait "${DRIP[@]}"
 
+echo "N-9 Connection: upgrade は断る（本文を送らずに、ワーカーを占有させない）"
+chk "upgrade は 400" "$(raw "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: upgrade\r\nContent-Length: 10\r\n\r\n")" "HTTP/1.1 400 Bad Request"
+UP=(); for _ in $(seq 1 16); do ( exec 8<>/dev/tcp/127.0.0.1/$PORT; printf "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Keep-Alive, Upgrade\r\nContent-Length: 10\r\n\r\n" >&8; sleep 5 ) & UP+=($!); done
+sleep 1
+t=$(curl -s -o /dev/null -m 3 -w '%{time_total}' $B/api/health)
+chk "upgrade 16 接続の間も、1秒以内に応答する" "$(awk -v t="$t" 'BEGIN{print (t<1.0)?"fast":"slow"}')" fast
+wait "${UP[@]}"
+
 [ $FAIL = 0 ] && echo "すべて通りました" || { echo "失敗があります"; exit 1; }

@@ -171,6 +171,18 @@ where
         }
     }
 
+    // Connection: upgrade は断る。生のストリームがそのままワーカーに渡り、本文を送らずに居座れてしまうため。
+    // このアプリは upgrade を使わない
+    if headers.iter().any(|h: &Header| {
+        h.field.equiv("Connection")
+            && h.value.as_str().split(',').any(|t| t.trim().eq_ignore_ascii_case("upgrade"))
+    }) {
+        return Err(RequestCreationError::CreationIoError(IoError::new(
+            ErrorKind::InvalidData,
+            "connection upgrade is not supported".to_string(),
+        )));
+    }
+
     // finding the content-length header（Transfer-Encoding があれば、上で断っている）
     let content_length: Option<usize> = headers
         .iter()
@@ -182,24 +194,9 @@ where
         return Err(RequestCreationError::ExpectationFailed);
     }
 
-    // true if the client sent a `Connection: upgrade` header
-    let connection_upgrade = {
-        match headers
-            .iter()
-            .find(|h: &&Header| h.field.equiv("Connection"))
-            .map(|h| h.value.as_str())
-        {
-            Some(v) if v.to_ascii_lowercase().contains("upgrade") => true,
-            _ => false,
-        }
-    };
-
     // we wrap `source_data` around a reading whose nature depends on the transfer-encoding and
     // content-length headers
-    let reader = if connection_upgrade {
-        // if we have a `Connection: upgrade`, always keeping the whole reader
-        Box::new(source_data) as Box<dyn Read + Send + 'static>
-    } else if let Some(content_length) = content_length {
+    let reader = if let Some(content_length) = content_length {
         if content_length == 0 {
             Box::new(io::empty()) as Box<dyn Read + Send + 'static>
         } else if content_length <= MAX_BUFFERED_BODY {

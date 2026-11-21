@@ -23,3 +23,5 @@
    全体だけの上限だと、1つの接続元が、全部の枠を埋めて、ヘルスチェックや同じ機械のプロキシまで、締め出せてしまうため。
 10. `src/request.rs`, `src/client.rs`: `Transfer-Encoding: chunked` を 411、`Expect`（`100-continue` を含む）を 417 で断り、本文は読まずに接続を閉じる。
    依存の chunked 解読器は chunk-size 行の長さに上限が無く、メモリを使い切れる。また、本文を送らない・少しずつ送る接続が、ワーカーを占有できる（認証より前に本文を読むため）。このアプリは常に `Content-Length` を送る。
+11. `src/request.rs`: `Connection: upgrade` を、本文を読まずに 400 で断り、接続を閉じる。
+   元の実装は、upgrade 付きの要求だけ `Content-Length` の事前バッファを使わず、生のストリームをワーカーに渡していた。本文を送らない接続が、ワーカーを占有できる（8〜16接続で全 API が止まる）。このアプリは `Request::upgrade()` を使わない。
